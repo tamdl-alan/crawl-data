@@ -1,1 +1,15 @@
+services:
+  - type: web
+    name: crawl-data-app
+    env: node
+    branch: main
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.1
+    plan: free
+    region: singapore
+    healthCheckPath: /
+    autoDeploy: true
 
