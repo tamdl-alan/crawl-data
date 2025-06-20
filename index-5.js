@@ -1,4 +1,5 @@
 // Import
+require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const cheerio = require('cheerio');
 const axios = require('axios');
@@ -20,7 +21,7 @@ const table = base('Crawling Processes');
 
 
 // ========== Common Start ========== //
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 const viewPortBrowser = { width: 1920, height: 1200 };
