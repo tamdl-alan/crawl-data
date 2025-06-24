@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: crawl-data-app
+    name: crawl-data-prj
     env: node
     branch: main
     buildCommand: "npm install"
@@ -12,4 +12,9 @@ services:
     region: singapore
     healthCheckPath: /
     autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    buildFilter:
+      paths:
+        - Dockerfile
+        - ./**
 
