@@ -14,7 +14,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 puppeteer.use(StealthPlugin());
-
+checkChrome();
 // ========== Config Airable Start ========== //
 Airtable.configure({
   apiKey: 'pat1PRTNBV90VSC5V.04105a19c23f69b8fc6f65ba2ee3eab9786ae74878aef5aafe03fd25c8a9b2a8'
@@ -90,7 +90,6 @@ app.get('/', (req, res) => {
 });
 
 app.get('/search', async (req, res) => {
-    checkChrome();
     const params = req.query;
     const recordIdInQueue = params.recordId;
 
