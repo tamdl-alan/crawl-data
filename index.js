@@ -30,7 +30,8 @@ const extraHTTPHeaders = {
 }
 const defaultBrowserArgs = {
   headless: 'new',
-  args: ['--no-sandbox', '--disable-setuid-sandbox']
+  args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome'
 }
 
 const STATUS_NEW = 'New';
