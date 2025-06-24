@@ -172,6 +172,7 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
+  console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
   const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
   try {
     if (cookieHeader) {
@@ -236,6 +237,7 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId) {
+  console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
   const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
   const page = await browser.newPage();
   try {
@@ -275,6 +277,7 @@ async function extractDetailsFromProductGoat(url, productId) {
   }
   let browserChild;
   try {
+    console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
     browserChild = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
     const page = await browserChild.newPage();
 
