@@ -1,17 +1,18 @@
 FROM ghcr.io/puppeteer/puppeteer:24.10.2
 
-# Tạo thư mục làm việc
+# Tạm thời chuyển thành root để cài package
+USER root
+
+# Tạo thư mục làm việc và cấp quyền cho pptruser
 WORKDIR /app
-
-# Copy code
 COPY . .
+RUN chown -R pptruser:pptruser /app
 
-# Cài npm package khi vẫn còn quyền root
+# Cài npm packages khi còn là root
 RUN npm install
 
-# Chạy app với user không phải root nếu có sẵn
-# USER pptruser  ← nếu cần bảo mật cao thì bật lại dòng này
+# Quay lại user mặc định bảo mật
+USER pptruser
 
 EXPOSE 3000
-
 CMD ["npm", "start"]
