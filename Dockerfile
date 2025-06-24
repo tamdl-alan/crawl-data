@@ -1,11 +1,16 @@
-FROM ghcr.io/puppeteer/puppeteer:19.7.2
+FROM ghcr.io/puppeteer/puppeteer:24.10.2
 
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+# Tạo thư mục làm việc
+WORKDIR /app
 
-WORKDIR /usr/src/app
-
-COPY package*.json ./
-RUN npm ci
+# Copy code
 COPY . .
-CMD [ "node", "index.js" ]
+
+# Cài dependency nếu có (nếu bạn dùng thêm gói npm khác ngoài puppeteer)
+RUN npm install
+
+# Expose cổng
+EXPOSE 3000
+
+# Chạy app
+CMD ["node", "index.js"]
