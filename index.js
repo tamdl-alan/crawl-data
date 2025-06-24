@@ -30,6 +30,7 @@ const extraHTTPHeaders = {
   'Accept-Language': 'ja,ja-JP;q=0.9,en;q=0.8'
 }
 const defaultBrowserArgs = {
+  executablePath: puppeteer.executablePath(),
   headless: 'new',
   args: ['--no-sandbox', '--disable-setuid-sandbox']
 }
