@@ -85,9 +85,11 @@ app.get('/search', async (req, res) => {
 
     const params = req.query;
     const recordIdInQueue = params.recordId;
+    const productIdInQueue = params.productId;
 
   // ✅ Cập nhật trạng thái là "Wait" ngay khi vào hàng đợi
     await updateStatus(recordIdInQueue, STATUS_CRAWLING);
+    res.status(200).send({message: `⏳ The product [${productIdInQueue}] is being crawled. Please wait a moment.`});
     if (requestQueue.length >= 100) {
     return res.status(429).send({ error: '⛔ Too many pending requests' });
   }
