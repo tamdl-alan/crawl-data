@@ -30,8 +30,7 @@ const extraHTTPHeaders = {
 }
 const defaultBrowserArgs = {
   headless: 'new',
-  args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome'
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
 }
 
 const STATUS_NEW = 'New';
@@ -173,7 +172,7 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
-  const browser = await puppeteer.launch(defaultBrowserArgs);
+  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
   try {
     if (cookieHeader) {
       return
@@ -237,7 +236,7 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId) {
-  const browser = await puppeteer.launch(defaultBrowserArgs);
+  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
   const page = await browser.newPage();
   try {
     await page.setViewport(viewPortBrowser);
@@ -276,7 +275,7 @@ async function extractDetailsFromProductGoat(url, productId) {
   }
   let browserChild;
   try {
-    browserChild = await puppeteer.launch(defaultBrowserArgs);
+    browserChild = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
     const page = await browserChild.newPage();
 
     await page.setViewport(viewPortBrowser);
