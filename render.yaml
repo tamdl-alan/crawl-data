@@ -1,20 +1,13 @@
 services:
   - type: web
     name: crawl-data-prj
-    env: node
-    branch: main
-    buildCommand: "npm install"
-    startCommand: "npm start"
-    envVars:
-      - key: NODE_VERSION
-        value: 20.11.1
+    env: docker
     plan: free
     region: singapore
-    healthCheckPath: /
-    autoDeploy: true
     dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
     buildFilter:
       paths:
         - Dockerfile
         - ./**
-
