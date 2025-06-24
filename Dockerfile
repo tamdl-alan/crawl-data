@@ -1,16 +1,18 @@
-FROM ghcr.io/puppeteer/puppeteer:24.10.2
+FROM ghcr.io/puppeteer/puppeteer:latest
 
-# Tạo thư mục làm việc
+# Tạo thư mục làm việc và chuyển quyền cho user `pptruser`
 WORKDIR /app
-
-# Copy code
 COPY . .
 
-# Cài dependency nếu có (nếu bạn dùng thêm gói npm khác ngoài puppeteer)
+# Chuyển quyền để user `pptruser` có thể ghi
+RUN chown -R pptruser:pptruser /app
+
+# Chạy dưới quyền user pptruser (nếu chưa có)
+USER pptruser
+
+# Cài đặt dependency
 RUN npm install
 
-# Expose cổng
 EXPOSE 3000
 
-# Chạy app
-CMD ["node", "index.js"]
+CMD ["npm", "start"]
