@@ -1,17 +1,16 @@
-FROM ghcr.io/puppeteer/puppeteer:latest
+FROM ghcr.io/puppeteer/puppeteer:24.10.2
 
-# Tạo thư mục làm việc và chuyển quyền cho user `pptruser`
+# Tạo thư mục làm việc
 WORKDIR /app
+
+# Copy code
 COPY . .
 
-# Chuyển quyền để user `pptruser` có thể ghi
-RUN chown -R pptruser:pptruser /app
-
-# Chạy dưới quyền user pptruser (nếu chưa có)
-USER pptruser
-
-# Cài đặt dependency
+# Cài npm package khi vẫn còn quyền root
 RUN npm install
+
+# Chạy app với user không phải root nếu có sẵn
+# USER pptruser  ← nếu cần bảo mật cao thì bật lại dòng này
 
 EXPOSE 3000
 
