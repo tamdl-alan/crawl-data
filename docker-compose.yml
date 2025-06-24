@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: crawl-data-app
+    ports:
+      - "3000:3000"
+    restart: always
+    environment:
+      - NODE_ENV=production
+    # Đảm bảo Chromium được tải ở build-time nếu cần
+    # (nếu bạn dùng puppeteer-core thì cần tự cài chrome)
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: ngrok-tunnel
+    restart: always
+    depends_on:
+      - app
+    command: http app:3000
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
