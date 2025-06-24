@@ -81,6 +81,10 @@ let productType = PRODUCT_TYPE.SHOE;
 const requestQueue = [];
 let isProcessingQueue = false;
 
+app.get('/', (req, res) => {
+  res.send('🟢 API is running!');
+});
+
 app.get('/search', async (req, res) => {
 
     const params = req.query;
