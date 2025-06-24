@@ -172,8 +172,8 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
-  console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
-  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
+  console.log('[DEBUG] Chrome path:', process.env.PUPPETEER_CACHE_DIR);
+  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: process.env.PUPPETEER_CACHE_DIR});
   try {
     if (cookieHeader) {
       return
@@ -237,8 +237,8 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId) {
-  console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
-  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
+  console.log('[DEBUG] Chrome path:', process.env.PUPPETEER_CACHE_DIR);
+  const browser = await puppeteer.launch({...defaultBrowserArgs, executablePath: process.env.PUPPETEER_CACHE_DIR});
   const page = await browser.newPage();
   try {
     await page.setViewport(viewPortBrowser);
@@ -277,8 +277,8 @@ async function extractDetailsFromProductGoat(url, productId) {
   }
   let browserChild;
   try {
-    console.log('[DEBUG] Chrome path:', puppeteer.executablePath());
-    browserChild = await puppeteer.launch({...defaultBrowserArgs, executablePath: puppeteer.executablePath()});
+    console.log('[DEBUG] Chrome path:', process.env.PUPPETEER_CACHE_DIR);
+    browserChild = await puppeteer.launch({...defaultBrowserArgs, executablePath: process.env.PUPPETEER_CACHE_DIR});
     const page = await browserChild.newPage();
 
     await page.setViewport(viewPortBrowser);
