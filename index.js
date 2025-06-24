@@ -7,19 +7,15 @@ const Airtable = require('airtable');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 const express = require('express');
-const fs = require('fs');
-const { execSync } = require('child_process');
-const chromePath = puppeteer.executablePath();
 const app = express();
 app.use(cors());
 app.use(express.json());
 puppeteer.use(StealthPlugin());
-checkChrome();
 // ========== Config Airable Start ========== //
 Airtable.configure({
-  apiKey: 'pat1PRTNBV90VSC5V.04105a19c23f69b8fc6f65ba2ee3eab9786ae74878aef5aafe03fd25c8a9b2a8'
+  apiKey: process.env.AIRTABLE_API_KEY
 });
-const base = Airtable.base('appQMNeEtUsgz8lQg');
+const base = Airtable.base(process.env.AIRTABLE_BASE_ID);
 const table = base('Crawling Processes');
 // ========== Config Airable End ========== //
 
@@ -33,7 +29,6 @@ const extraHTTPHeaders = {
   'Accept-Language': 'ja,ja-JP;q=0.9,en;q=0.8'
 }
 const defaultBrowserArgs = {
-  executablePath: puppeteer.executablePath(),
   headless: 'new',
   args: ['--no-sandbox', '--disable-setuid-sandbox']
 }
@@ -448,18 +443,6 @@ function conditionCheckSize(productElm, products) {
     }
   }
   return false;
-}
-
-async function checkChrome() {
-
-if (fs.existsSync(chromePath)) {
-  try {
-    execSync(`chmod +x ${chromePath}`);
-    console.log('✅ Chrome executable is now executable');
-  } catch (e) {
-    console.error('❌ Failed to chmod Chrome:', e.message);
-  }
-}
 }
 
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
