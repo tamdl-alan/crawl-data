@@ -84,6 +84,10 @@ app.get('/', (req, res) => {
   res.send('🟢 API is running!');
 });
 
+app.get('/check-chrome', (req, res) => {
+  res.send(`Chrome path Puppeteer sees: ${puppeteer.executablePath()}`);
+});
+
 app.get('/search', async (req, res) => {
     const params = req.query;
     const recordIdInQueue = params.recordId;
