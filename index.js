@@ -109,7 +109,6 @@ app.get('/search', async (req, res) => {
     const recordIdInQueue = params.recordId;
     const crawlStatusParam = params.crawlStatus;
     if (crawlStatusParam === STATUS_CRAWLING) {
-      await updateStatus(recordIdInQueue, STATUS_ERROR);
       return res.status(400).send({ error: '⛔ Request is already in progress' });
     }
   // ✅ Cập nhật trạng thái là "Wait" ngay khi vào hàng đợi
@@ -500,10 +499,6 @@ cron.schedule('0 0 * * *', () => {
 async function triggerAllSearchesFromAirtable() {
   try {
     const records = await base(DATA_SEARCH_TABLE).select().all();
-    // for (const record of records) {
-    //   const recordId = record.id;
-    //   await updateStatus(recordId, STATUS_CRAWLING);
-    // }
     for (const record of records) {
       const recordId = record.id;
       const productId = record.get(PRODUCT_ID);
