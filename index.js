@@ -8,8 +8,15 @@ const Airtable = require('airtable');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 const express = require('express');
+const cron = require('node-cron');
+
 const app = express();
-app.use(cors());
+// app.use(cors());
+app.use(cors({
+  origin: '*', // hoặc origin cụ thể nếu bạn biết origin của Airtable extension
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 puppeteer.use(StealthPlugin());
 // ========== Config Airable Start ========== //
@@ -88,14 +95,22 @@ app.get('/', (req, res) => {
   res.send('🟢 API is running!');
 });
 
-app.get('/check-chrome', (req, res) => {
-  res.send(`Chrome path Puppeteer sees: ${puppeteer.executablePath()}`);
+
+app.get('/crawl-all', async (req, res) => {
+  // Trigger the cron job to crawl all records
+  await triggerAllSearchesFromAirtable();
+  res.status(200).send('OK');
 });
+
+
 
 app.get('/search', async (req, res) => {
     const params = req.query;
     const recordIdInQueue = params.recordId;
-
+    const crawlStatusParam = params.crawlStatus;
+    if (crawlStatusParam === STATUS_CRAWLING) {
+      return res.status(400).send({ error: '⛔ Request is already in progress' });
+    }
   // ✅ Cập nhật trạng thái là "Wait" ngay khi vào hàng đợi
     await updateStatus(recordIdInQueue, STATUS_CRAWLING);
     if (requestQueue.length >= 100) {
@@ -454,9 +469,54 @@ function conditionCheckSize(productElm, products) {
 
 app.listen(PORT, async () => {
   try {
-    const listener = await ngrok.connect({ addr: PORT, authtoken_from_env: true, domain: process.env.NGROK_STATIC_DOMAIN });
+    const listener = await ngrok.connect({ 
+      addr: PORT, 
+      authtoken_from_env: true, 
+      domain: process.env.NGROK_STATIC_DOMAIN,
+      proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
+      host_header: 'rewrite'
+    });
     console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
   } catch (err) {
     console.error('❌ Failed to connect ngrok:', err);
   }
 });
+
+cron.schedule('0 0 * * *', () => {
+  console.log('⏰ Running scheduled crawl at 0h');
+  triggerAllSearchesFromAirtable();
+});
+
+async function triggerAllSearchesFromAirtable() {
+  try {
+    const records = await base(DATA_SEARCH_TABLE).select().all();
+    // for (const record of records) {
+    //   const recordId = record.id;
+    //   await updateStatus(recordId, STATUS_CRAWLING);
+    // }
+    for (const record of records) {
+      const recordId = record.id;
+      const productId = record.get(PRODUCT_ID);
+      const snkrdunkApi = record.get('Snkrdunk API');
+      const productType = record.get('Product Type');
+
+      if (!productId || !snkrdunkApi) {
+        console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
+        continue;
+      }
+
+      const url = `https://platypus-poetic-factually.ngrok-free.app/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+
+      try {
+        console.log(`📤 Triggering crawl for ${productId}`);
+        axios.get(url);
+      } catch (err) {
+        console.error(`❌ Error calling /search for ${productId}:`, err.message);
+      }
+    }
+
+    console.log(`✅ Đã gọi API cho tất cả record lúc 0h.`);
+  } catch (err) {
+    console.error('❌ Error fetching records from Airtable:', err.message);
+  }
+}
