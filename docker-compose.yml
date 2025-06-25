@@ -18,7 +18,7 @@ services:
     restart: always
     depends_on:
       - app
-    command: http app:3000
+    command: http --domain=platypus-poetic-factually.ngrok-free.app app:3000
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
     ports:

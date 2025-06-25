@@ -10,6 +10,7 @@ const express = require('express');
 const app = express();
 app.use(cors());
 app.use(express.json());
+puppeteer.use(StealthPlugin());
 
 // ========== Config Airable Start ========== //
 Airtable.configure({
@@ -73,6 +74,7 @@ const RETRY_LIMIT = 3; // Retry limit for login attempts
 // ========== Goal Start ========== //
 const goalDomain = 'https://www.goat.com';
 const searchUrl = 'https://www.goat.com/search';
+let productType = PRODUCT_TYPE.SHOE;
 // ========== Goal End ========== //
 
 app.get('/search', async (req, res) => {
@@ -83,22 +85,23 @@ app.get('/search', async (req, res) => {
     recordId = params.recordId;
     const productId = params.productId;
     const snkrdunkApi = params.snkrdunkApi;
-    const productType = params.productType || PRODUCT_TYPE.SHOE;
-    await updateStatus(recordId, STATUS_CRAWLING);
+    productType = params.productType || PRODUCT_TYPE.SHOE;
+    // await updateStatus(recordId, STATUS_CRAWLING);
 
-    console.log(`------------Crawling data [${productId}] SNKRDUNK Start------------`);
+    console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
     const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
-    console.log(`------------Crawling data [${productId}] SNKRDUNK End------------`);
+    console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}------------`);
 
-    console.log(`------------Crawling data [${productId}] GOAT Start------------`);
+    console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}------------`);
     const dataGoat = await crawlDataGoat(productId)
-    console.log(`------------Crawling data [${productId}] GOAT End------------`);
+    console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}------------`);
 
     const mergedArr = mergeData(dataSnk, dataGoat);
-    await deleteRecordByProductId(productId);
-    await pushToAirtable(mergedArr);
+    // await deleteRecordByProductId(productId);
+    // await pushToAirtable(mergedArr);
   } catch (error) {
     await updateStatus(recordId, STATUS_ERROR);
+    console.error(`❌ Error during crawling process:`, error.message);
     throw error;
   }
   await updateStatus(recordId, STATUS_SUCCESS);
@@ -117,8 +120,10 @@ async function deleteRecordByProductId(productId) {
   console.log(`✅ Deleted ${existingRecords.length} records with Product ID: ${productId}`);
 }
 
-function mergeData(data, dataGoal) {
-  const priceMap = new Map(data.map(p => [String(p[SIZE_SNKRDUNK]), p[PRICE_SNKRDUNK]]));
+function mergeData(dataSnk, dataGoal) {
+  console.log(' dataSnk:', dataSnk);
+  console.log(' dataGoal:', dataGoal);
+  const priceMap = new Map(dataSnk?.map(p => [String(p[SIZE_SNKRDUNK]), p[PRICE_SNKRDUNK]]));
   const merged = dataGoal.map(item => {
     const sizeStr = item[SIZE_GOAT];
     const priceSnk = priceMap.get(sizeStr);
@@ -146,8 +151,8 @@ async function snkrdunkLogin() {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
     await page.goto(LOGIN_PAGE_SNKRDUNK, { waitUntil: 'networkidle2' });
-    await page.type('input[name="email"]', EMAIL_SNKRDUNK, { delay: 50 });
-    await page.type('input[name="password"]', PASSWORD_SNKRDUNK, { delay: 50 });
+    await page.type('input[name="email"]', EMAIL_SNKRDUNK, { delay: 100 });
+    await page.type('input[name="password"]', PASSWORD_SNKRDUNK, { delay: 100 });
     await page.evaluate(() => document.querySelector('form').submit());
     const cookies = await page.cookies();
     cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
@@ -159,6 +164,7 @@ async function snkrdunkLogin() {
       cookieHeader = '';
       retryCount++;
       if (retryCount < RETRY_LIMIT) {
+        console.log(`Retrying login (${retryCount}/${RETRY_LIMIT})...`);
         await snkrdunkLogin();
       }
       throw err;
@@ -190,7 +196,10 @@ async function snkrdunkfetchData(api) {
         'Origin': DOMAIN_SNKRDUNK
       }
     });
-    return response?.data || null;
+    if (productType === PRODUCT_TYPE.SHOE) {
+      return response?.data || null;
+    }
+    return response || null;
   } catch (err) {
     console.error('API [' + api + '] call failed:', err.message);
     throw err;
@@ -198,7 +207,6 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId) {
-  puppeteer.use(StealthPlugin());
   const browser = await puppeteer.launch(defaultBrowserArgs);
   const page = await browser.newPage();
   try {
@@ -213,12 +221,20 @@ async function crawlDataGoat(productId) {
 
     let fullLink = '';
 
-    $('a').each((_i, el) => {
-      const link = $(el).attr('href');
-      if (link && link.includes(productId?.toLowerCase())) {
-        fullLink = goalDomain + link;
-        return;
-      }
+    // $('a').each((_i, el) => {
+    //   const link = $(el).attr('href');
+    //   if (link && link.includes(productId?.toLowerCase())) {
+    //     fullLink = goalDomain + link;
+    //     return;
+    //   }
+    // });
+
+    // Lấy item đầu tiên trong danh sách sản phẩm
+    $('div[data-qa="grid_cell_product"]').each((_i, el) => {
+      const aTag = $(el).find('a');
+      const link = aTag.attr('href');
+      fullLink = goalDomain + link;
+      return false;
     });
 
     const details = await extractDetailsFromProductGoat(fullLink, productId);
@@ -238,7 +254,6 @@ async function extractDetailsFromProductGoat(url, productId) {
   }
   let browserChild;
   try {
-    puppeteer.use(StealthPlugin());
     browserChild = await puppeteer.launch(defaultBrowserArgs);
     const page = await browserChild.newPage();
 
@@ -250,8 +265,8 @@ async function extractDetailsFromProductGoat(url, productId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -275,20 +290,23 @@ async function extractDetailsFromProductGoat(url, productId) {
       }
     });
 
-    $('div.swiper-slide').each((i, el) => {
-      const text = $(el).children()?.text()?.split('¥');
-      if (text.length && text[0] && text[1] && text[0] <= 12 && text[0] >= 6 && !products.some(product => product[SIZE_GOAT] === text[0].trim())) {
+    await page.waitForSelector('div.swiper-slide', { timeout: 60000 });
+    $('div.swiper-slide').each((_i, el) => {
+      const elm = $(el).children()?.text()?.split('¥');
+      console.log(' elm:', $(el).children()?.text());
+      if (conditionCheckSize(elm, products)) {
         const dataRow = {
                           [PRODUCT_ID]: productId,
                           [PRODUCT_NAME]: imgAlt,
                           [IMAGE]: [{ url: imgSrc }],
-                          [SIZE_GOAT]: text[0],
-                          [PRICE_GOAT]: parseInt(text[1].replace(/,/g, ""), 10)
+                          [SIZE_GOAT]: elm[0]?.toString()?.trim()?.toLowerCase(),
+                          [PRICE_GOAT]: parseInt(elm[1].replace(/,/g, ""), 10)
                         };
         products.push(dataRow);
       }
     });
-    console.log(`✅ Extracted data!!!`);
+
+    console.log(`✅ Extracted Goat data!!!`);
     console.table(products, [PRODUCT_NAME, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
   } catch (err) {
@@ -359,7 +377,7 @@ async function updateStatus(recordId, newStatus) {
       {
         id: recordId,
         fields: {
-          Status: newStatus
+        Status: newStatus
         }
       }
     ]);
@@ -379,17 +397,35 @@ function getSizeAndPriceSnkrdunk(data, productType) {
         return null;
       }
       return {
-        [SIZE_SNKRDUNK]: size,
+        [SIZE_SNKRDUNK]: size.toString()?.trim().toLowerCase(),
         [PRICE_SNKRDUNK]: item.price
       };
     }).filter(item => item !== null);
   }
   return data?.sizePrices?.map(item => {
     return {
-      [SIZE_SNKRDUNK]: item.size.localizedName,
+      [SIZE_SNKRDUNK]: item.size.localizedName?.toString()?.trim().toLowerCase(),
       [PRICE_SNKRDUNK]: item.minListingPrice
     };
   });
+}
+
+function conditionCheckSize(productElm, products) {
+  const sizeItem = productElm && productElm[0]?.trim()
+  const nameItem = productElm && productElm[1]?.trim()
+  if (sizeItem && nameItem) {
+    if (productType === PRODUCT_TYPE.SHOE) {
+      if (sizeItem <= 12 && sizeItem >= 6 && !products.some(product => product[SIZE_GOAT] === sizeItem)) {
+        return true;
+      }
+    } else {
+      console.log('sizeItem:', sizeItem);
+      console.log('nameItem:', nameItem);
+
+      return true;
+    }
+  }
+  return false;
 }
 
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
