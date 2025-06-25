@@ -3,6 +3,7 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const cheerio = require('cheerio');
 const axios = require('axios');
+const ngrok = require('@ngrok/ngrok');
 const Airtable = require('airtable');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
@@ -33,8 +34,6 @@ const defaultBrowserArgs = {
   args: [
     "--disable-setuid-sandbox",
       "--no-sandbox",
-      "--single-process",
-      "--no-zygote",
   ]
 }
 
@@ -64,8 +63,8 @@ let recordId = '';
 
 
 // ========== Snkrdunk Start ========== //
-const EMAIL_SNKRDUNK = 'cathoiloi1135@gmail.com';
-const PASSWORD_SNKRDUNK = 'Sy123456';
+const EMAIL_SNKRDUNK = process.env.EMAIL_SNKRDUNK || '';
+const PASSWORD_SNKRDUNK = process.env.PASSWORD_SNKRDUNK || '';
 const DOMAIN_SNKRDUNK = 'https://snkrdunk.com';
 const LOGIN_PAGE_SNKRDUNK = `${DOMAIN_SNKRDUNK}/accounts/login`;
 let cookieHeader = '';
@@ -115,7 +114,7 @@ async function processQueueToCrawl() {
     const { req, res } = requestQueue.shift();
 
     const params = req.query;
-    const recordId = params.recordId;
+    recordId = params.recordId;
     const productId = params.productId;
     const snkrdunkApi = params.snkrdunkApi;
     const productType = params.productType || PRODUCT_TYPE.SHOE;
@@ -195,7 +194,6 @@ async function snkrdunkLogin() {
     const cookies = await page.cookies();
     cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     retryCount = 0; // Reset retry count on successful login
-    await browser.close();
   } catch (err) {
       console.error('Snkrdunk login failed:', err.message);
       // Retry login if it fails
@@ -454,4 +452,11 @@ function conditionCheckSize(productElm, products) {
   return false;
 }
 
-app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+app.listen(PORT, async () => {
+  try {
+    const listener = await ngrok.connect({ addr: PORT, authtoken_from_env: true, domain: process.env.NGROK_STATIC_DOMAIN });
+    console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
+  } catch (err) {
+    console.error('❌ Failed to connect ngrok:', err);
+  }
+});

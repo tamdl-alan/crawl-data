@@ -10,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@ngrok/ngrok": "^1.5.1",
     "airtable": "^0.12.2",
     "axios": "^1.9.0",
     "cheerio": "^1.0.0",

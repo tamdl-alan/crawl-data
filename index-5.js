@@ -86,7 +86,7 @@ app.get('/search', async (req, res) => {
     const productId = params.productId;
     const snkrdunkApi = params.snkrdunkApi;
     productType = params.productType || PRODUCT_TYPE.SHOE;
-    // await updateStatus(recordId, STATUS_CRAWLING);
+    await updateStatus(recordId, STATUS_CRAWLING);
 
     console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
     const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
@@ -97,8 +97,8 @@ app.get('/search', async (req, res) => {
     console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}------------`);
 
     const mergedArr = mergeData(dataSnk, dataGoat);
-    // await deleteRecordByProductId(productId);
-    // await pushToAirtable(mergedArr);
+    await deleteRecordByProductId(productId);
+    await pushToAirtable(mergedArr);
   } catch (error) {
     await updateStatus(recordId, STATUS_ERROR);
     console.error(`❌ Error during crawling process:`, error.message);
