@@ -109,6 +109,7 @@ app.get('/search', async (req, res) => {
     const recordIdInQueue = params.recordId;
     const crawlStatusParam = params.crawlStatus;
     if (crawlStatusParam === STATUS_CRAWLING) {
+      await updateStatus(recordIdInQueue, STATUS_ERROR);
       return res.status(400).send({ error: '⛔ Request is already in progress' });
     }
   // ✅ Cập nhật trạng thái là "Wait" ngay khi vào hàng đợi
@@ -131,9 +132,11 @@ async function processQueueToCrawl() {
     const params = req.query;
     recordId = params.recordId;
     const productId = params.productId;
-    const snkrdunkApi = params.snkrdunkApi;
+    const snkrdunkApi = params.snkrdunkApi?.replace(/^\/+/, '');
     const productType = params.productType || PRODUCT_TYPE.SHOE;
-
+    if (!productId || !snkrdunkApi) {
+      return res.status(400).send({ error: '⛔ Invalid Product ID or Product Type' });
+    }
     try {
 
       console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
