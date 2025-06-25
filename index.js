@@ -234,6 +234,7 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
     return getSizeAndPriceSnkrdunk(dataRes?.data, productType);
   } catch (err) {
     console.error('Error during Snkrdunk login:', err.message);
+    res.status(500).send({ error: err.message });
     throw err;
   }
 }
@@ -256,6 +257,7 @@ async function snkrdunkfetchData(api) {
     return response || null;
   } catch (err) {
     console.error('API [' + api + '] call failed:', err.message);
+    res.status(500).send({ error: err.message });
     throw err;
   }
 }
@@ -287,6 +289,7 @@ async function crawlDataGoat(productId) {
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${url}:`, err.message);
+    res.status(500).send({ error: err.message });
     throw err;
   } finally {
     await page.close();
@@ -357,6 +360,7 @@ async function extractDetailsFromProductGoat(url, productId) {
   } catch (err) {
     await updateStatus(recordId, STATUS_ERROR);
     console.error(`❌ Error parsing product ${url}:`, err.message);
+    res.status(500).send({ error: err.message });
     throw err;
   } finally {
     if (browserChild) {
@@ -372,6 +376,7 @@ async function pushToAirtable(records) {
       table.create(chunk.map(item => ({ fields: item })), function (err, records) {
         if (err) {
           console.error('❌ Airtable error:', err);
+          res.status(500).send({ error: err.message });
           resolve();
           return;
         }
@@ -430,6 +435,7 @@ async function updateStatus(recordId, newStatus) {
     console.log(`✅ Updated the status of ${recordId} to "${newStatus}".`);
   } catch (err) {
     console.error('❌ Error update status:', err);
+    res.status(500).send({ error: err.message });
     throw err;
   }
 }
@@ -482,6 +488,7 @@ app.listen(PORT, async () => {
     console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
   } catch (err) {
     console.error('❌ Failed to connect ngrok:', err);
+    res.status(500).send({ error: err.message });
   }
 });
 
@@ -515,11 +522,13 @@ async function triggerAllSearchesFromAirtable() {
         axios.get(url);
       } catch (err) {
         console.error(`❌ Error calling /search for ${productId}:`, err.message);
+        res.status(500).send({ error: err.message });
       }
     }
 
     console.log(`✅ Đã gọi API cho tất cả record lúc 0h.`);
   } catch (err) {
     console.error('❌ Error fetching records from Airtable:', err.message);
+    res.status(500).send({ error: err.message });
   }
 }
