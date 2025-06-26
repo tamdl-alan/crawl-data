@@ -365,7 +365,7 @@ async function extractDetailsFromProductGoat(url, productId) {
     throw err;
   } finally {
     if (browserChild) {
-      await browserChild.close();
+      await browserChild?.close();
     }
   }
 }
@@ -436,7 +436,6 @@ async function updateStatus(recordId, newStatus) {
     console.log(`✅ Updated the status of ${recordId} to "${newStatus}".`);
   } catch (err) {
     console.error('❌ Error update status:', err);
-    res.status(500).send({ error: err.message });
     throw err;
   }
 }
