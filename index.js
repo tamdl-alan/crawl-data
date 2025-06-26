@@ -102,8 +102,6 @@ app.get('/crawl-all', async (req, res) => {
   res.status(200).send('OK');
 });
 
-
-
 app.get('/search', async (req, res) => {
     const params = req.query;
     const recordIdInQueue = params.recordId;
@@ -147,11 +145,15 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
-      await deleteRecordByProductId(productId);
-      await pushToAirtable(mergedArr);
-
+      if (!mergedArr.length) {
+        console.warn(`⚠️ No data found for Product ID: ${productId}`);
+        res.status(200).send({ error: '⛔ No data found for the given Product ID' });  
+      } else {
+        await deleteRecordByProductId(productId);
+        await pushToAirtable(mergedArr);
+        res.status(200).send({ message: `✅ Done crawling ${productId}` });
+      }
       await updateStatus(recordId, STATUS_SUCCESS);
-      res.status(200).send({ message: `✅ Done crawling ${productId}` });
     } catch (error) {
       await updateStatus(recordId, STATUS_ERROR);
       console.error(`❌ Error crawling ${productId}:`, error.message);
@@ -159,7 +161,6 @@ async function processQueueToCrawl() {
       isProcessingQueue = false;
     }
   }
-
   isProcessingQueue = false;
 }
 
@@ -276,7 +277,7 @@ async function crawlDataGoat(productId) {
 
     let fullLink = '';
 
-    // Lấy item đầu tiên trong danh sách sản phẩm
+    // get first product link
     $('div[data-qa="grid_cell_product"]').each((_i, el) => {
       const aTag = $(el).find('a');
       const link = aTag.attr('href');
@@ -313,7 +314,8 @@ async function extractDetailsFromProductGoat(url, productId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 100000 });
+    await acceptCookiesIfPresent(page);
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -525,5 +527,25 @@ async function triggerAllSearchesFromAirtable() {
   } catch (err) {
     console.error('❌ Error fetching records from Airtable:', err.message);
     res.status(500).send({ error: err.message });
+  }
+}
+async function acceptCookiesIfPresent(page) {
+  try {
+    await page.waitForFunction(() => {
+    return [...document.querySelectorAll('button')].some(
+      btn => btn.innerText.trim().includes('Accept All Cookies')
+    );
+  }, { timeout: 3000 });
+
+  // 2. Click nút đó
+  await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button')];
+    const acceptBtn = buttons.find(btn => btn.innerText.trim().includes('Accept All Cookies'));
+    if (acceptBtn) acceptBtn.click();
+  });
+
+  console.log(' Clicked Accept All Cookies button');
+  } catch (err) {
+    console.log('Not found Accept All Cookies button');
   }
 }
