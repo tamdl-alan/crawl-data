@@ -136,26 +136,24 @@ async function processQueueToCrawl() {
     }
     try {
 
-      // console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
-      // const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
-      // console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
+      console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
+      const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
+      console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
 
       console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}]------------`);
       const dataGoat = await crawlDataGoat(productId);
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
-      // const mergedArr = mergeData(dataSnk, dataGoat);
-      // if (!mergedArr.length) {
-      //   console.log(`⚠️ No data found for Product ID: ${productId}`);
-      //   res.status(404).send({ error: 'No data found' });
-      //   isProcessingQueue = false;
-      //   return;
-      // }
-      // await deleteRecordByProductId(productId);
-      // await pushToAirtable(mergedArr);
-
+      const mergedArr = mergeData(dataSnk, dataGoat);
+      if (!mergedArr.length) {
+        console.warn(`⚠️ No data found for Product ID: ${productId}`);
+        res.status(200).send({ error: '⛔ No data found for the given Product ID' });  
+      } else {
+        await deleteRecordByProductId(productId);
+        await pushToAirtable(mergedArr);
+        res.status(200).send({ message: `✅ Done crawling ${productId}` });
+      }
       await updateStatus(recordId, STATUS_SUCCESS);
-      res.status(200).send({ message: `✅ Done crawling ${productId}` });
     } catch (error) {
       await updateStatus(recordId, STATUS_ERROR);
       console.error(`❌ Error crawling ${productId}:`, error.message);
@@ -163,7 +161,6 @@ async function processQueueToCrawl() {
       isProcessingQueue = false;
     }
   }
-
   isProcessingQueue = false;
 }
 
@@ -317,12 +314,8 @@ async function extractDetailsFromProductGoat(url, productId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 50000 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 100000 });
     await acceptCookiesIfPresent(page);
-    await page.waitForFunction(() => {
-      const list = document.querySelectorAll('.swiper-wrapper');
-      return list.length > 0;
-    });
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -338,6 +331,7 @@ async function extractDetailsFromProductGoat(url, productId) {
     //   }
     // });
 
+    await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
     $('div.swiper-slide-active').each((i, el) => {
       const img = $(el).find('img');
       if (img && !imgSrc && !imgAlt) {
@@ -346,7 +340,7 @@ async function extractDetailsFromProductGoat(url, productId) {
       }
     });
 
-    await page.screenshot({ path: `screenshot-${productId}.png`, fullPage: true });
+    await page.waitForSelector('div.swiper-slide', { timeout: 60000 });
     $('div.swiper-slide').each((_i, el) => {
       const elm = $(el).children()?.text()?.split('¥');
       if (conditionCheckSize(elm, products)) {
@@ -371,7 +365,7 @@ async function extractDetailsFromProductGoat(url, productId) {
     throw err;
   } finally {
     if (browserChild) {
-      await browserChild.close();
+      await browserChild?.close();
     }
   }
 }
@@ -442,7 +436,6 @@ async function updateStatus(recordId, newStatus) {
     console.log(`✅ Updated the status of ${recordId} to "${newStatus}".`);
   } catch (err) {
     console.error('❌ Error update status:', err);
-    res.status(500).send({ error: err.message });
     throw err;
   }
 }
@@ -484,19 +477,20 @@ function conditionCheckSize(productElm, products) {
 }
 
 app.listen(PORT, async () => {
-  try {
-    const listener = await ngrok.connect({ 
-      addr: PORT, 
-      authtoken_from_env: true, 
-      domain: process.env.NGROK_STATIC_DOMAIN,
-      proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
-      host_header: 'rewrite'
-    });
-    console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
-  } catch (err) {
-    console.error('❌ Failed to connect ngrok:', err);
-    res.status(500).send({ error: err.message });
-  }
+  // try {
+  //   const listener = await ngrok.connect({ 
+  //     addr: PORT, 
+  //     authtoken_from_env: true, 
+  //     domain: process.env.NGROK_STATIC_DOMAIN,
+  //     proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
+  //     host_header: 'rewrite'
+  //   });
+  //   console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
+  // } catch (err) {
+  //   console.error('❌ Failed to connect ngrok:', err);
+  //   res.status(500).send({ error: err.message });
+  // }
+  console.log(`🚀 Listening on port ${PORT}`);
 });
 
 cron.schedule('0 0 * * *', () => {
