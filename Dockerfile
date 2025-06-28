@@ -1,8 +1,10 @@
-FROM node:20
+# Sử dụng image Node chính thức
+FROM node:20-slim
 
-# Cài đầy đủ các thư viện cho Chromium
+# Cài các dependencies cần thiết
 RUN apt-get update && apt-get install -y \
     wget \
+    gnupg2 \
     ca-certificates \
     fonts-liberation \
     libappindicator3-1 \
@@ -11,30 +13,32 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcups2 \
     libdbus-1-3 \
-    libgdk-pixbuf2.0-0 \
+    libdrm2 \
+    libgbm1 \
     libnspr4 \
     libnss3 \
-    libx11-xcb1 \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
     xdg-utils \
-    libgbm1 \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Tạo thư mục làm việc
+# Cài Google Chrome Stable
+RUN wget -q -O google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get update && \
+    apt-get install -y ./google-chrome.deb && \
+    rm google-chrome.deb
+
+# Tạo thư mục app
 WORKDIR /app
-
-# Cài dependencies
-COPY package*.json ./
-RUN npm install
-
-# Copy toàn bộ code
 COPY . .
 
-# Expose cổng
-EXPOSE 3000
+# Cài thư viện node
+RUN npm install
 
-# Lệnh chạy app
-CMD ["npm", "start"]
+# Đặt biến môi trường trỏ đến Chrome
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+
+# Khởi chạy app
+CMD ["node", "index.js"]

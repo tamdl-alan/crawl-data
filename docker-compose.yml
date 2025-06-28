@@ -12,14 +12,14 @@ services:
     # Đảm bảo Chromium được tải ở build-time nếu cần
     # (nếu bạn dùng puppeteer-core thì cần tự cài chrome)
 
-  ngrok:
-    image: ngrok/ngrok:latest
-    container_name: ngrok-tunnel
-    restart: always
-    depends_on:
-      - app
-    command: http --domain=platypus-poetic-factually.ngrok-free.app app:3000
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    ports:
-      - "4040:4040"
+  # ngrok:
+  #   image: ngrok/ngrok:latest
+  #   container_name: ngrok-tunnel
+  #   restart: always
+  #   depends_on:
+  #     - app
+  #   command: http --domain=platypus-poetic-factually.ngrok-free.app app:3000
+  #   environment:
+  #     - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+  #   ports:
+  #     - "4040:4040"

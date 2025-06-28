@@ -36,7 +36,7 @@ const extraHTTPHeaders = {
   'Accept-Language': 'ja,ja-JP;q=0.9,en;q=0.8'
 }
 const defaultBrowserArgs = {
-  headless: 'false',
+  headless: 'true',
   executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
   args: [
     "--disable-setuid-sandbox",
@@ -44,7 +44,6 @@ const defaultBrowserArgs = {
   ]
 }
 
-const STATUS_NEW = 'New';
 const STATUS_CRAWLING = 'Crawling';
 const STATUS_SUCCESS = 'Success';
 const STATUS_ERROR = 'Error';
@@ -84,6 +83,7 @@ const RETRY_LIMIT = 3; // Retry limit for login attempts
 // ========== Goal Start ========== //
 const goalDomain = 'https://www.goat.com';
 const searchUrl = 'https://www.goat.com/search';
+const sizeAndPriceGoatUrl = 'https://www.goat.com/web-api/v1/product_variants/buy_bar_data?productTemplateId'
 let productType = PRODUCT_TYPE.SHOE;
 // ========== Goal End ========== //
 
@@ -91,12 +91,12 @@ let productType = PRODUCT_TYPE.SHOE;
 const requestQueue = [];
 let isProcessingQueue = false;
 
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
 });
 
 
-app.get('/crawl-all', async (req, res) => {
+app.get('/crawl-all', async (_req, res) => {
   // Trigger the cron job to crawl all records
   await triggerAllSearchesFromAirtable();
   res.status(200).send('OK');
@@ -109,7 +109,6 @@ app.get('/search', async (req, res) => {
     if (crawlStatusParam === STATUS_CRAWLING) {
       return res.status(400).send({ error: '⛔ Request is already in progress' });
     }
-  // ✅ Cập nhật trạng thái là "Wait" ngay khi vào hàng đợi
     await updateStatus(recordIdInQueue, STATUS_CRAWLING);
     if (requestQueue.length >= 100) {
     return res.status(429).send({ error: '⛔ Too many pending requests' });
@@ -145,7 +144,7 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
-      if (!mergedArr.length) {
+      if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
         res.status(200).send({ error: '⛔ No data found for the given Product ID' });  
       } else {
@@ -178,7 +177,7 @@ async function deleteRecordByProductId(productId) {
 
 function mergeData(dataSnk, dataGoal) {
   const priceMap = new Map(dataSnk?.map(p => [String(p[SIZE_SNKRDUNK]), p[PRICE_SNKRDUNK]]));
-  const merged = dataGoal.map(item => {
+  const merged = dataGoal?.map(item => {
     const sizeStr = item[SIZE_GOAT];
     const priceSnk = priceMap.get(sizeStr);
     const priceGoat = parseInt(item[PRICE_GOAT]);
@@ -193,7 +192,7 @@ function mergeData(dataSnk, dataGoal) {
       [NOTE]: '',
     };
   });
-  return merged;
+  return merged || [];
 }
 
 async function snkrdunkLogin() {
@@ -271,7 +270,7 @@ async function crawlDataGoat(productId) {
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
 
-    await page.goto(`${searchUrl}?query=${productId}`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(`${searchUrl}?query=${productId}`, { waitUntil: 'networkidle2' });
 
     const content = await page.content();
     const $ = cheerio.load(content);
@@ -286,7 +285,6 @@ async function crawlDataGoat(productId) {
       cellItemId = $(el).attr('data-grid-cell-name');
       return false;
     });
-
     const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
@@ -299,15 +297,13 @@ async function crawlDataGoat(productId) {
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId, cellItemId) {
-  if (!url || !cellItemId) {
+async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
+  if (!url || !cellItemIdParam) {
     return [];
   }
-  let browserChild;
+  const  browserChild = await puppeteer.launch(defaultBrowserArgs);
+  const page = await browserChild.newPage();
   try {
-    browserChild = await puppeteer.launch(defaultBrowserArgs);
-    const page = await browserChild.newPage();
-
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
@@ -316,9 +312,9 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 100000 });
-    const response = await page.evaluate(async () => {
-      const res = await fetch(`https://www.goat.com/web-api/v1/product_variants/buy_bar_data?productTemplateId=${cellItemId}`, {
+    await page.goto(url, { waitUntil: 'networkidle2' });
+    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
+      const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
         credentials: 'include',
         headers: {
           'Accept-Language':	'en-US,en;q=0.9',
@@ -328,14 +324,13 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId) {
         }
       });
       return res.json();
-    });
+    }, cellItemIdParam, sizeAndPriceGoatUrl);
     const html = await page.content();
     const $ = cheerio.load(html);
 
     let imgSrc = '';
     let imgAlt = '';
-    // let sku = '';
-    const products = [];
+    let products = [];
 
     await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
     $('div.swiper-slide-active').each((i, el) => {
@@ -346,7 +341,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId) {
       }
     });
 
-    const dataMap = getSizeAndPriceGoat(response?.data, productType);
+    const dataMap = getSizeAndPriceGoat(response, productType);
     products = dataMap?.map(item => {
       return {
         [PRODUCT_ID]: productId,
@@ -358,17 +353,15 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId) {
     });
 
     console.log(`✅ Extracted Goat data!!!`);
-    console.table(products, [PRODUCT_NAME, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
+    console.table(products, [PRODUCT_ID, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
   } catch (err) {
     await updateStatus(recordId, STATUS_ERROR);
-    console.error(`❌ Error extract product ${url}:`, err.message);
-    res.status(500).send({ error: err.message });
+    console.error(`❌ Error extract product:`, err.message);
     throw err;
   } finally {
-    if (browserChild) {
-      await browserChild?.close();
-    }
+    await page.close();
+    await browserChild.close();
   }
 }
 
@@ -465,26 +458,28 @@ function getSizeAndPriceSnkrdunk(data, productType) {
 
 function getSizeAndPriceGoat(data, productType) {
   const dataMap = data?.map(item => {
-    return {
-      [SIZE_GOAT]: item.sizeOption.presentation.toString()?.trim()?.toLowerCase(),
-      [PRICE_GOAT]: item?.lowestPriceCents?.amount
-    };
+    if (item.shoeCondition === "new_no_defects" && item.stockStatus !== "not_in_stock") {
+      return {
+        [SIZE_GOAT]: item.sizeOption?.presentation?.toString()?.trim()?.toLowerCase(),
+        [PRICE_GOAT]: item?.lowestPriceCents?.amount / 10 // Convert cents to yen
+      };
+    }
+    return null;
   }).filter(item => item !== null);
   if (productType === PRODUCT_TYPE.SHOE) {
     return dataMap?.filter(item => {
-      const size = parseInt(item[SIZE_GOAT]);
-      return size >= 6 && size <= 12 && !isNaN(size);
+      const sizeGoat = parseInt(item[SIZE_GOAT]);
+      const priceGoat = Number(item[PRICE_GOAT]);
+      return conditionCheckSize(sizeGoat, priceGoat)
     });
   }
   return dataMap || [];
 }
 
-function conditionCheckSize(productElm, products) {
-  const sizeItem = productElm && productElm[0]?.trim()
-  const nameItem = productElm && productElm[1]?.trim()
+function conditionCheckSize(sizeItem, nameItem) {
   if (sizeItem && nameItem) {
     if (productType === PRODUCT_TYPE.SHOE) {
-      if (sizeItem <= 12 && sizeItem >= 6 && !products.some(product => product[SIZE_GOAT] === sizeItem)) {
+      if (sizeItem >= 6 && sizeItem <= 12) {
         return true;
       }
     } else {
@@ -517,7 +512,7 @@ async function triggerAllSearchesFromAirtable() {
         continue;
       }
 
-      const url = `https://platypus-poetic-factually.ngrok-free.app/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+      const url = `https://${MAIN_URL}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
 
       try {
         console.log(`📤 Triggering crawl for ${productId}`);
@@ -528,29 +523,9 @@ async function triggerAllSearchesFromAirtable() {
       }
     }
 
-    console.log(`✅ Đã gọi API cho tất cả record lúc 0h.`);
+    console.log(`✅ Called the API for all records at 0h`);
   } catch (err) {
     console.error('❌ Error fetching records from Airtable:', err.message);
     res.status(500).send({ error: err.message });
-  }
-}
-async function acceptCookiesIfPresent(page) {
-  try {
-    await page.waitForFunction(() => {
-    return [...document.querySelectorAll('button')].some(
-      btn => btn.innerText.trim().includes('Accept All Cookies')
-    );
-  }, { timeout: 3000 });
-
-  // 2. Click nút đó
-  await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button')];
-    const acceptBtn = buttons.find(btn => btn.innerText.trim().includes('Accept All Cookies'));
-    if (acceptBtn) acceptBtn.click();
-  });
-
-  console.log(' Clicked Accept All Cookies button');
-  } catch (err) {
-    console.log('Not found Accept All Cookies button');
   }
 }
