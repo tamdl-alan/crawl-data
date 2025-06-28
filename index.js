@@ -477,19 +477,20 @@ function conditionCheckSize(productElm, products) {
 }
 
 app.listen(PORT, async () => {
-  try {
-    const listener = await ngrok.connect({ 
-      addr: PORT, 
-      authtoken_from_env: true, 
-      domain: process.env.NGROK_STATIC_DOMAIN,
-      proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
-      host_header: 'rewrite'
-    });
-    console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
-  } catch (err) {
-    console.error('❌ Failed to connect ngrok:', err);
-    res.status(500).send({ error: err.message });
-  }
+  // try {
+  //   const listener = await ngrok.connect({ 
+  //     addr: PORT, 
+  //     authtoken_from_env: true, 
+  //     domain: process.env.NGROK_STATIC_DOMAIN,
+  //     proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
+  //     host_header: 'rewrite'
+  //   });
+  //   console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
+  // } catch (err) {
+  //   console.error('❌ Failed to connect ngrok:', err);
+  //   res.status(500).send({ error: err.message });
+  // }
+  console.log(`🚀 Listening on port ${PORT}`);
 });
 
 cron.schedule('0 0 * * *', () => {
