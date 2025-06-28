@@ -36,10 +36,11 @@ const extraHTTPHeaders = {
   'Accept-Language': 'ja,ja-JP;q=0.9,en;q=0.8'
 }
 const defaultBrowserArgs = {
-  headless: 'new',
+  headless: 'false',
+  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
   args: [
     "--disable-setuid-sandbox",
-      "--no-sandbox",
+    "--no-sandbox",
   ]
 }
 
@@ -156,7 +157,6 @@ async function processQueueToCrawl() {
     } catch (error) {
       await updateStatus(recordId, STATUS_ERROR);
       console.error(`❌ Error crawling ${productId}:`, error.message);
-      res.status(500).send({ error: error.message });
       isProcessingQueue = false;
     }
   }
@@ -362,7 +362,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId) {
     return products;
   } catch (err) {
     await updateStatus(recordId, STATUS_ERROR);
-    console.error(`❌ Error parsing product ${url}:`, err.message);
+    console.error(`❌ Error extract product ${url}:`, err.message);
     res.status(500).send({ error: err.message });
     throw err;
   } finally {
