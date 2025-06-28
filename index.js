@@ -3,7 +3,6 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const cheerio = require('cheerio');
 const axios = require('axios');
-const ngrok = require('@ngrok/ngrok');
 const Airtable = require('airtable');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
@@ -231,7 +230,9 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
   try {
     await snkrdunkLogin();
     const dataRes = await snkrdunkfetchData(apiUrl);
-    return getSizeAndPriceSnkrdunk(dataRes?.data, productType);
+    const dataSnkr = getSizeAndPriceSnkrdunk(dataRes?.data, productType);
+    console.table(dataSnkr, [SIZE_SNKRDUNK, PRICE_SNKRDUNK]);
+    return dataSnkr || [];
   } catch (err) {
     console.error('Error during Snkrdunk login:', err.message);
     res.status(500).send({ error: err.message });
@@ -276,16 +277,17 @@ async function crawlDataGoat(productId) {
     const $ = cheerio.load(content);
 
     let fullLink = '';
-
+    let cellItemId = '';
     // get first product link
     $('div[data-qa="grid_cell_product"]').each((_i, el) => {
       const aTag = $(el).find('a');
       const link = aTag.attr('href');
       fullLink = goalDomain + link;
+      cellItemId = $(el).attr('data-grid-cell-name');
       return false;
     });
 
-    const details = await extractDetailsFromProductGoat(fullLink, productId);
+    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${url}:`, err.message);
@@ -297,8 +299,8 @@ async function crawlDataGoat(productId) {
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId) {
-  if (!url) {
+async function extractDetailsFromProductGoat(url, productId, cellItemId) {
+  if (!url || !cellItemId) {
     return [];
   }
   let browserChild;
@@ -315,7 +317,18 @@ async function extractDetailsFromProductGoat(url, productId) {
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 100000 });
-    await acceptCookiesIfPresent(page);
+    const response = await page.evaluate(async () => {
+      const res = await fetch(`https://www.goat.com/web-api/v1/product_variants/buy_bar_data?productTemplateId=${cellItemId}`, {
+        credentials: 'include',
+        headers: {
+          'Accept-Language':	'en-US,en;q=0.9',
+          'Accept': 'application/json',
+          'Referer': 'https://www.goat.com',
+          'Origin': 'https://www.goat.com',
+        }
+      });
+      return res.json();
+    });
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -323,13 +336,6 @@ async function extractDetailsFromProductGoat(url, productId) {
     let imgAlt = '';
     // let sku = '';
     const products = [];
-
-    // $('div.window-item').each((i, el) => {
-    //   const spans = $(el).find('span');
-    //   if (spans.length >= 2 && $(spans[0]).text().trim() === 'SKU') {
-    //     sku = $(spans[1]).text().trim();
-    //   }
-    // });
 
     await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
     $('div.swiper-slide-active').each((i, el) => {
@@ -340,18 +346,14 @@ async function extractDetailsFromProductGoat(url, productId) {
       }
     });
 
-    await page.waitForSelector('div.swiper-slide', { timeout: 60000 });
-    $('div.swiper-slide').each((_i, el) => {
-      const elm = $(el).children()?.text()?.split('¥');
-      if (conditionCheckSize(elm, products)) {
-        const dataRow = {
-                          [PRODUCT_ID]: productId,
-                          [PRODUCT_NAME]: imgAlt,
-                          [IMAGE]: [{ url: imgSrc }],
-                          [SIZE_GOAT]: elm[0]?.toString()?.trim()?.toLowerCase(),
-                          [PRICE_GOAT]: parseInt(elm[1].replace(/,/g, ""), 10)
-                        };
-        products.push(dataRow);
+    const dataMap = getSizeAndPriceGoat(response?.data, productType);
+    products = dataMap?.map(item => {
+      return {
+        [PRODUCT_ID]: productId,
+        [PRODUCT_NAME]: imgAlt,
+        [IMAGE]: [{ url: imgSrc }],
+        [SIZE_GOAT]: item[SIZE_GOAT],
+        [PRICE_GOAT]: item[PRICE_GOAT]
       }
     });
 
@@ -461,6 +463,22 @@ function getSizeAndPriceSnkrdunk(data, productType) {
   });
 }
 
+function getSizeAndPriceGoat(data, productType) {
+  const dataMap = data?.map(item => {
+    return {
+      [SIZE_GOAT]: item.sizeOption.presentation.toString()?.trim()?.toLowerCase(),
+      [PRICE_GOAT]: item?.lowestPriceCents?.amount
+    };
+  }).filter(item => item !== null);
+  if (productType === PRODUCT_TYPE.SHOE) {
+    return dataMap?.filter(item => {
+      const size = parseInt(item[SIZE_GOAT]);
+      return size >= 6 && size <= 12 && !isNaN(size);
+    });
+  }
+  return dataMap || [];
+}
+
 function conditionCheckSize(productElm, products) {
   const sizeItem = productElm && productElm[0]?.trim()
   const nameItem = productElm && productElm[1]?.trim()
@@ -477,19 +495,6 @@ function conditionCheckSize(productElm, products) {
 }
 
 app.listen(PORT, async () => {
-  // try {
-  //   const listener = await ngrok.connect({ 
-  //     addr: PORT, 
-  //     authtoken_from_env: true, 
-  //     domain: process.env.NGROK_STATIC_DOMAIN,
-  //     proto: 'http', // Hoặc 'https' nếu ứng dụng của bạn là HTTPS
-  //     host_header: 'rewrite'
-  //   });
-  //   console.log(`🚀 Listening on port ${PORT} | 🌍 Ngrok tunnel: ${listener.url()}`);
-  // } catch (err) {
-  //   console.error('❌ Failed to connect ngrok:', err);
-  //   res.status(500).send({ error: err.message });
-  // }
   console.log(`🚀 Listening on port ${PORT}`);
 });
 
