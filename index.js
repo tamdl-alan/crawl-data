@@ -41,6 +41,8 @@ const defaultBrowserArgs = {
   args: [
     "--disable-setuid-sandbox",
     "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu,"
   ]
 }
 
@@ -234,7 +236,6 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
     return dataSnkr || [];
   } catch (err) {
     console.error('Error during Snkrdunk login:', err.message);
-    res.status(500).send({ error: err.message });
     throw err;
   }
 }
