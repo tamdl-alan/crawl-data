@@ -9,8 +9,9 @@ services:
     restart: always
     environment:
       - NODE_ENV=production
-    # Đảm bảo Chromium được tải ở build-time nếu cần
-    # (nếu bạn dùng puppeteer-core thì cần tự cài chrome)
+    # dns:
+    #   - 8.8.8.8
+    #   - 1.1.1.1
 
   # ngrok:
   #   image: ngrok/ngrok:latest

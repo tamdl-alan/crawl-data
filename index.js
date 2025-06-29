@@ -131,7 +131,7 @@ async function processQueueToCrawl() {
     recordId = params.recordId;
     const productId = params.productId;
     const snkrdunkApi = params.snkrdunkApi?.replace(/^\/+/, '');
-    const productType = params.productType || PRODUCT_TYPE.SHOE;
+    productType = params.productType || PRODUCT_TYPE.SHOE;
     if (!productId || !snkrdunkApi) {
       return res.status(400).send({ error: '⛔ Invalid Product ID or Product Type' });
     }
@@ -148,7 +148,7 @@ async function processQueueToCrawl() {
       const mergedArr = mergeData(dataSnk, dataGoat);
       if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
-        res.status(200).send({ error: '⛔ No data found for the given Product ID' });  
+        res.status(200).send({ message: '⛔ No data found for the given Product ID' });  
       } else {
         await deleteRecordByProductId(productId);
         await pushToAirtable(mergedArr);
@@ -231,9 +231,9 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
   try {
     await snkrdunkLogin();
     const dataRes = await snkrdunkfetchData(apiUrl);
-    const dataSnkr = getSizeAndPriceSnkrdunk(dataRes?.data, productType);
-    console.table(dataSnkr, [SIZE_SNKRDUNK, PRICE_SNKRDUNK]);
-    return dataSnkr || [];
+    const snkrMapped = getSizeAndPriceSnkrdunk(dataRes, productType)
+    console.table(snkrMapped, [SIZE_SNKRDUNK, PRICE_SNKRDUNK]);
+    return snkrMapped || [];
   } catch (err) {
     console.error('Error during Snkrdunk login:', err.message);
     throw err;
@@ -253,12 +253,11 @@ async function snkrdunkfetchData(api) {
       }
     });
     if (productType === PRODUCT_TYPE.SHOE) {
-      return response?.data || null;
+      return response?.data?.data || [];
     }
-    return response || null;
+    return response?.data || [];
   } catch (err) {
     console.error('API [' + api + '] call failed:', err.message);
-    res.status(500).send({ error: err.message });
     throw err;
   }
 }
@@ -290,7 +289,6 @@ async function crawlDataGoat(productId) {
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${url}:`, err.message);
-    res.status(500).send({ error: err.message });
     throw err;
   } finally {
     await page.close();
@@ -331,7 +329,6 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
 
     let imgSrc = '';
     let imgAlt = '';
-    let products = [];
 
     await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
     $('div.swiper-slide-active').each((i, el) => {
@@ -341,9 +338,8 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         imgAlt = img.attr('alt');
       }
     });
-
-    const dataMap = getSizeAndPriceGoat(response, productType);
-    products = dataMap?.map(item => {
+    const dataFiltered = getSizeAndPriceGoat(response, productType);
+    const products = dataFiltered?.map(item => {
       return {
         [PRODUCT_ID]: productId,
         [PRODUCT_NAME]: imgAlt,
@@ -352,7 +348,6 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         [PRICE_GOAT]: item[PRICE_GOAT]
       }
     });
-
     console.log(`✅ Extracted Goat data!!!`);
     console.table(products, [PRODUCT_ID, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
@@ -447,7 +442,7 @@ function getSizeAndPriceSnkrdunk(data, productType) {
         [SIZE_SNKRDUNK]: size.toString()?.trim().toLowerCase(),
         [PRICE_SNKRDUNK]: item.price
       };
-    }).filter(item => item !== null);
+    }).filter(item => item);
   }
   return data?.sizePrices?.map(item => {
     return {
