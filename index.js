@@ -232,6 +232,7 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
     await snkrdunkLogin();
     const dataRes = await snkrdunkfetchData(apiUrl);
     const snkrMapped = getSizeAndPriceSnkrdunk(dataRes, productType)
+    console.log(`✅ Extracted Goat data!!!`);
     console.table(snkrMapped, [SIZE_SNKRDUNK, PRICE_SNKRDUNK]);
     return snkrMapped || [];
   } catch (err) {
@@ -413,6 +414,20 @@ function convertCmToUs(cm) {
   return sizeMap[cm] ?? null;
 }
 
+function convertSizeClothes(size) {
+  if (!size) {
+    return null;
+  }
+
+  if (size === '2xl') {
+    return 'xxl'
+  } else if (size === '3xl') {
+    return 'xxxl'
+  } else if (size === '4xl') {
+    return 'xxxxl'
+  }
+  return size
+}
 async function updateStatus(recordId, newStatus) {
   try {
     await base(DATA_SEARCH_TABLE).update([
@@ -439,7 +454,7 @@ function getSizeAndPriceSnkrdunk(data, productType) {
         return null;
       }
       return {
-        [SIZE_SNKRDUNK]: size.toString()?.trim().toLowerCase(),
+        [SIZE_SNKRDUNK]: convertSizeClothes(size.toString()?.trim().toLowerCase()),
         [PRICE_SNKRDUNK]: item.price
       };
     }).filter(item => item);
