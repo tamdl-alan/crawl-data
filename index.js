@@ -479,7 +479,7 @@ function getSizeAndPriceGoat(data, productType) {
   }).filter(item => item !== null);
   if (productType === PRODUCT_TYPE.SHOE) {
     return dataMap?.filter(item => {
-      const sizeGoat = parseInt(item[SIZE_GOAT]);
+      const sizeGoat = Number(item[SIZE_GOAT]);
       const priceGoat = Number(item[PRICE_GOAT]);
       return conditionCheckSize(sizeGoat, priceGoat)
     });
