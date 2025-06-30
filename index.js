@@ -538,6 +538,5 @@ async function triggerAllSearchesFromAirtable() {
     console.log(`✅ Called the API for all records at 0h`);
   } catch (err) {
     console.error('❌ Error fetching records from Airtable:', err.message);
-    res.status(500).send({ error: err.message });
   }
 }
