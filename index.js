@@ -455,7 +455,7 @@ function getSizeAndPriceSnkrdunk(data, productType) {
         return null;
       }
       return {
-        [SIZE_SNKRDUNK]: convertSizeClothes(size.toString()?.trim().toUpperCase()),
+        [SIZE_SNKRDUNK]: size.toString()?.trim(),
         [PRICE_SNKRDUNK]: item.price
       };
     }).filter(item => item);
@@ -472,7 +472,7 @@ function getSizeAndPriceGoat(data, productType) {
   const dataMap = data?.map(item => {
     if (item.shoeCondition === "new_no_defects" && item.stockStatus !== "not_in_stock") {
       return {
-        [SIZE_GOAT]: item.sizeOption?.presentation?.toString()?.trim()?.toUpperCase(),
+        [SIZE_GOAT]: convertSizeClothes(item.size?.localizedName?.toString()?.trim().toUpperCase()),
         [PRICE_GOAT]: item?.lowestPriceCents?.amount / 100 // Convert cents to yen
       };
     }
