@@ -419,15 +419,16 @@ function convertSizeClothes(size) {
     return null;
   }
 
-  if (size === '2xl') {
-    return 'xxl'
-  } else if (size === '3xl') {
-    return 'xxxl'
-  } else if (size === '4xl') {
-    return 'xxxxl'
+  if (size === 'XXL') {
+    return '2XL'
+  } else if (size === 'XXXL') {
+    return '3XL'
+  } else if (size === 'XXXXL') {
+    return '4XL'
   }
   return size
 }
+
 async function updateStatus(recordId, newStatus) {
   try {
     await base(DATA_SEARCH_TABLE).update([
@@ -454,14 +455,14 @@ function getSizeAndPriceSnkrdunk(data, productType) {
         return null;
       }
       return {
-        [SIZE_SNKRDUNK]: convertSizeClothes(size.toString()?.trim().toLowerCase()),
+        [SIZE_SNKRDUNK]: convertSizeClothes(size.toString()?.trim().toUpperCase()),
         [PRICE_SNKRDUNK]: item.price
       };
     }).filter(item => item);
   }
   return data?.sizePrices?.map(item => {
     return {
-      [SIZE_SNKRDUNK]: item.size.localizedName?.toString()?.trim().toLowerCase(),
+      [SIZE_SNKRDUNK]: convertSizeClothes(item.size.localizedName?.toString()?.trim().toUpperCase()),
       [PRICE_SNKRDUNK]: item.minListingPrice
     };
   });
@@ -471,7 +472,7 @@ function getSizeAndPriceGoat(data, productType) {
   const dataMap = data?.map(item => {
     if (item.shoeCondition === "new_no_defects" && item.stockStatus !== "not_in_stock") {
       return {
-        [SIZE_GOAT]: item.sizeOption?.presentation?.toString()?.trim()?.toLowerCase(),
+        [SIZE_GOAT]: item.sizeOption?.presentation?.toString()?.trim()?.toUpperCase(),
         [PRICE_GOAT]: item?.lowestPriceCents?.amount / 100 // Convert cents to yen
       };
     }
