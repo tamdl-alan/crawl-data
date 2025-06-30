@@ -471,9 +471,9 @@ function getSizeAndPriceSnkrdunk(data, productType) {
 function getSizeAndPriceGoat(data, productType) {
   const dataMap = data?.map(item => {
     if (item.shoeCondition === "new_no_defects" && item.stockStatus !== "not_in_stock") {
-      const sizeGoat = item.size?.localizedName?.toString()?.trim()
+      const sizeGoat = item.sizeOption.presentation?.toString()?.trim();
       return {
-        [SIZE_GOAT]: productType === PRODUCT_TYPE.SHOE ? sizeGoat : convertSizeClothes(sizeGoat.toUperCase()),
+        [SIZE_GOAT]: productType === PRODUCT_TYPE.SHOE ? sizeGoat : convertSizeClothes(sizeGoat?.toUpperCase()),
         [PRICE_GOAT]: item?.lowestPriceCents?.amount / 100 // Convert cents to yen
       };
     }
