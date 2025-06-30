@@ -472,7 +472,7 @@ function getSizeAndPriceGoat(data, productType) {
     if (item.shoeCondition === "new_no_defects" && item.stockStatus !== "not_in_stock") {
       return {
         [SIZE_GOAT]: item.sizeOption?.presentation?.toString()?.trim()?.toLowerCase(),
-        [PRICE_GOAT]: item?.lowestPriceCents?.amount / 10 // Convert cents to yen
+        [PRICE_GOAT]: item?.lowestPriceCents?.amount / 100 // Convert cents to yen
       };
     }
     return null;
