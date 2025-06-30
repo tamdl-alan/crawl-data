@@ -532,7 +532,6 @@ async function triggerAllSearchesFromAirtable() {
         axios.get(url);
       } catch (err) {
         console.error(`❌ Error calling /search for ${productId}:`, err.message);
-        res.status(500).send({ error: err.message });
       }
     }
 
