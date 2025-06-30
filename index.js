@@ -101,7 +101,7 @@ app.get('/', (_req, res) => {
 app.get('/crawl-all', async (_req, res) => {
   // Trigger the cron job to crawl all records
   await triggerAllSearchesFromAirtable();
-  res.status(200).send('OK');
+  res.status(200).send('✅ Called the API for all records at 0h');
 });
 
 app.get('/search', async (req, res) => {
@@ -529,14 +529,13 @@ async function triggerAllSearchesFromAirtable() {
 
       try {
         console.log(`📤 Triggering crawl for ${productId}`);
-        axios.get(url);
+        await axios.get(url);
       } catch (err) {
         console.error(`❌ Error calling /search for ${productId}:`, err.message);
       }
     }
-
-    console.log(`✅ Called the API for all records at 0h`);
   } catch (err) {
     console.error('❌ Error fetching records from Airtable:', err.message);
+    throw err;
   }
 }
