@@ -41,4 +41,4 @@ RUN npm install
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 # Khởi chạy app
-CMD ["node", "index.js"]
+CMD ["node", "index-2.js"]
