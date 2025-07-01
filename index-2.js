@@ -370,7 +370,6 @@ async function pushToAirtable(records) {
       table.create(chunk.map(item => ({ fields: item })), function (err, records) {
         if (err) {
           console.error('❌ Airtable error:', err);
-          res.status(500).send({ error: err.message });
           resolve();
           return;
         }
@@ -504,7 +503,7 @@ function conditionCheckSize(sizeItem, nameItem) {
 }
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Listening on port ${PORT}`);
+  console.log(`🚀 Listening on port ${PORT} for Sy`);
 });
 
 cron.schedule('0 0 * * *', () => {
