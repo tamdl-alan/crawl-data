@@ -529,7 +529,7 @@ async function triggerAllSearchesFromAirtable() {
 
       try {
         console.log(`📤 Triggering crawl for ${productId}`);
-        await axios.get(url);
+        axios.get(url);
       } catch (err) {
         console.error(`❌ Error calling /search for ${productId}:`, err.message);
       }
