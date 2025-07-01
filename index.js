@@ -23,7 +23,7 @@ Airtable.configure({
   apiKey: process.env.AIRTABLE_API_KEY
 });
 const base = Airtable.base(process.env.AIRTABLE_BASE_ID);
-const table = base('Crawling Processes');
+const table = base(process.env.DATA_CRAWLED_TABLE);
 // ========== Config Airable End ========== //
 
 
@@ -64,7 +64,6 @@ const PROFIT_AMOUNT = 'Profit Amount';
 const IMAGE = 'Image';
 const DATE_CREATED = 'Date Created';
 const NOTE = 'Note';
-const DATA_SEARCH_TABLE = 'Data Search';
 
 let recordId = '';
 // ========== Common End ========== //
@@ -142,7 +141,7 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
 
       console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}]------------`);
-      const dataGoat = await crawlDataGoat(productId);
+      const dataGoat = await crawlDataGoat(productId, productType);
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
@@ -263,7 +262,7 @@ async function snkrdunkfetchData(api) {
   }
 }
 
-async function crawlDataGoat(productId) {
+async function crawlDataGoat(productId, productType) {
   const browser = await puppeteer.launch(defaultBrowserArgs);
   const page = await browser.newPage();
   try {
@@ -278,14 +277,16 @@ async function crawlDataGoat(productId) {
 
     let fullLink = '';
     let cellItemId = '';
-    // get first product link
-    $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-      const aTag = $(el).find('a');
-      const link = aTag.attr('href');
-      fullLink = goalDomain + link;
-      cellItemId = $(el).attr('data-grid-cell-name');
-      return false;
-    });
+      // get first product link
+      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
+        const aTag = $(el).find('a');
+        const link = aTag.attr('href');
+        if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
+          fullLink = goalDomain + link;
+          cellItemId = $(el).attr('data-grid-cell-name');
+          return false;
+        }
+      });
     const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
@@ -431,7 +432,7 @@ function convertSizeClothes(size) {
 
 async function updateStatus(recordId, newStatus) {
   try {
-    await base(DATA_SEARCH_TABLE).update([
+    await base(process.env.DATA_SEARCH_TABLE).update([
       {
         id: recordId,
         fields: {
@@ -513,7 +514,7 @@ cron.schedule('0 0 * * *', () => {
 
 async function triggerAllSearchesFromAirtable() {
   try {
-    const records = await base(DATA_SEARCH_TABLE).select().all();
+    const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
     for (const record of records) {
       const recordId = record.id;
       const productId = record.get(PRODUCT_ID);
