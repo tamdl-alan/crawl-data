@@ -8,6 +8,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const cors = require('cors');
 const express = require('express');
 const cron = require('node-cron');
+const pLimit = require('p-limit').default;
 
 const app = express();
 // app.use(cors());
@@ -53,6 +54,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
+const CONCURRENCY_LIMIT = 3; // Số lượng request đồng thời
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -506,39 +508,103 @@ app.listen(PORT, async () => {
   console.log(`🚀 Listening on port ${PORT} for Sy`);
 });
 
-cron.schedule('0 0 * * *', () => {
+cron.schedule('0 0 * * *', async () => {
   console.log('⏰ Running scheduled crawl at 0h');
-  triggerAllSearchesFromAirtable();
+  await triggerAllSearchesFromAirtable();
 });
 
+// async function triggerAllSearchesFromAirtable() {
+//     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
+//     if (records.length === 0) {
+//       console.warn('⚠️ No records found in the Airtable table.');
+//       return;
+//     }
+//     for (const record of records) {
+//       const recordIdCallAll = record.id;
+//       const productId = record.get(PRODUCT_ID);
+//       const snkrdunkApi = record.get('Snkrdunk API');
+//       const productType = record.get('Product Type');
+
+//       if (!productId || !snkrdunkApi) {
+//         console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordIdCallAll}`);
+//         continue;
+//       }
+
+//       const url = `https://${process.env.MAIN_URL}/search?recordId=${encodeURIComponent(recordIdCallAll)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+
+//       try {
+//         console.log(`📤 Triggering crawl for ${productId}`);
+//         await axios.get(url, { timeout: 900000 });
+//       } catch (err) {
+//         console.error(`❌ Error calling /search for ${productId}:`, err.message);
+//         await updateStatus(recordIdCallAll, STATUS_ERROR);
+//       }
+//     }
+// }
+
 async function triggerAllSearchesFromAirtable() {
+  try {
     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
     if (records.length === 0) {
       console.warn('⚠️ No records found in the Airtable table.');
       return;
     }
-    // for (const record of records) {
 
-    // }
-    for (const record of records) {
-      const recordIdCallAll = record.id;
-      const productId = record.get(PRODUCT_ID);
-      const snkrdunkApi = record.get('Snkrdunk API');
-      const productType = record.get('Product Type');
+    const limit = pLimit(CONCURRENCY_LIMIT);
 
-      if (!productId || !snkrdunkApi) {
-        console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordIdCallAll}`);
-        continue;
-      }
+    const tasks = records.map((record) =>
+      limit(async () => {
+        const recordId = record.id;
+        const productId = record.get(PRODUCT_ID);
+        const snkrdunkApi = record.get('Snkrdunk API');
+        const productType = record.get('Product Type');
 
-      const url = `https://${process.env.MAIN_URL}/search?recordId=${encodeURIComponent(recordIdCallAll)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+        if (!productId || !snkrdunkApi) {
+          console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
+          return {
+            status: 'skipped',
+            productId,
+          };
+        }
 
-      try {
+        const url = `http://localhost:3000/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+
         console.log(`📤 Triggering crawl for ${productId}`);
-        await axios.get(url);
-      } catch (err) {
-        console.error(`❌ Error calling /search for ${productId}:`, err.message);
-        await updateStatus(recordIdCallAll, STATUS_ERROR);
+
+        try {
+          await axios.get(url, { timeout: 900000 });
+          return {
+            status: 'fulfilled',
+            productId,
+          };
+        } catch (err) {
+          return {
+            status: 'rejected',
+            productId,
+            reason: err.message,
+          };
+        }
+      })
+    );
+
+    const results = await Promise.allSettled(tasks);
+
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        const { status, productId, reason } = result.value;
+        if (status === 'rejected') {
+          console.error(`❌ Lỗi với sản phẩm ${productId}: ${reason}`);
+        } else if (status === 'skipped') {
+          console.warn(`⚠️ Bỏ qua sản phẩm không đủ dữ liệu: ${productId}`);
+        } else {
+          console.log(`✅ Đã crawl xong: ${productId}`);
+        }
+      } else {
+        console.error(`❌ Promise thất bại ngoài mong đợi`, result.reason);
       }
-    }
+    });
+  } catch (err) {
+    console.error('❌ Lỗi khi lấy record từ Airtable:', err.message);
+    throw err;
+  }
 }
