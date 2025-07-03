@@ -512,30 +512,33 @@ cron.schedule('0 0 * * *', () => {
 });
 
 async function triggerAllSearchesFromAirtable() {
-  try {
     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
+    if (records.length === 0) {
+      console.warn('⚠️ No records found in the Airtable table.');
+      return;
+    }
+    // for (const record of records) {
+
+    // }
     for (const record of records) {
-      const recordId = record.id;
+      const recordIdCallAll = record.id;
       const productId = record.get(PRODUCT_ID);
       const snkrdunkApi = record.get('Snkrdunk API');
       const productType = record.get('Product Type');
 
       if (!productId || !snkrdunkApi) {
-        console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
+        console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordIdCallAll}`);
         continue;
       }
 
-      const url = `https://${process.env.MAIN_URL}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+      const url = `https://${process.env.MAIN_URL}/search?recordId=${encodeURIComponent(recordIdCallAll)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
 
       try {
         console.log(`📤 Triggering crawl for ${productId}`);
-        axios.get(url);
+        await axios.get(url);
       } catch (err) {
         console.error(`❌ Error calling /search for ${productId}:`, err.message);
+        await updateStatus(recordIdCallAll, STATUS_ERROR);
       }
     }
-  } catch (err) {
-    console.error('❌ Error fetching records from Airtable:', err.message);
-    throw err;
-  }
 }
