@@ -567,7 +567,7 @@ async function triggerAllSearchesFromAirtable() {
           };
         }
 
-        const url = `http://localhost:3000/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+        const url = `http://localhost:${PORT}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
 
         console.log(`📤 Triggering crawl for ${productId}`);
 
