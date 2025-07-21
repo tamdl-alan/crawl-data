@@ -54,7 +54,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 3; // Số lượng request đồng thời
+const CONCURRENCY_LIMIT = 2; // Số lượng request đồng thời
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -93,51 +93,214 @@ let productType = PRODUCT_TYPE.SHOE;
 // ====== Queue quản lý request tuần tự ====== //
 const requestQueue = [];
 let isProcessingQueue = false;
+let lastQueueProcessTime = Date.now();
+let currentProcessingRequest = null;
+
+// Queue health check
+setInterval(() => {
+  const now = Date.now();
+  const timeSinceLastProcess = now - lastQueueProcessTime;
+  
+  // If queue has been processing for more than 20 minutes, reset it
+  if (isProcessingQueue && timeSinceLastProcess > 20 * 60 * 1000) {
+    console.warn('⚠️ Queue has been processing for too long, resetting...');
+    isProcessingQueue = false;
+    lastQueueProcessTime = now;
+    currentProcessingRequest = null;
+  }
+  
+  // If a single request has been processing for more than 10 minutes, log warning
+  if (currentProcessingRequest && (now - currentProcessingRequest.startTime) > 10 * 60 * 1000) {
+    console.warn(`⚠️ Request ${currentProcessingRequest.productId} has been processing for ${Math.round((now - currentProcessingRequest.startTime)/1000)}s`);
+  }
+  
+  // Log queue status every 5 minutes
+  if (now % (5 * 60 * 1000) < 1000) {
+    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s`);
+  }
+}, 60000); // Check every minute
 
 app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
 });
 
+app.get('/status', (_req, res) => {
+  res.json({
+    status: 'running',
+    timestamp: new Date().toISOString(),
+    queue: {
+      length: requestQueue.length,
+      isProcessing: isProcessingQueue
+    },
+    environment: {
+      port: PORT,
+      concurrencyLimit: CONCURRENCY_LIMIT
+    }
+  });
+});
+
+app.get('/queue-info', (_req, res) => {
+  const queueInfo = {
+    queueLength: requestQueue.length,
+    isProcessing: isProcessingQueue,
+    timestamp: new Date().toISOString(),
+    memoryUsage: process.memoryUsage(),
+    uptime: process.uptime(),
+    lastQueueProcessTime: lastQueueProcessTime,
+    currentProcessingRequest: currentProcessingRequest
+  };
+  
+  console.log('📊 Queue Info:', queueInfo);
+  res.json(queueInfo);
+});
+
+app.get('/queue-debug', (_req, res) => {
+  const debugInfo = {
+    queue: {
+      length: requestQueue.length,
+      isProcessing: isProcessingQueue,
+      lastProcessTime: new Date(lastQueueProcessTime).toISOString(),
+      timeSinceLastProcess: Date.now() - lastQueueProcessTime
+    },
+    currentRequest: currentProcessingRequest ? {
+      productId: currentProcessingRequest.productId,
+      startTime: new Date(currentProcessingRequest.startTime).toISOString(),
+      processingTime: Date.now() - currentProcessingRequest.startTime
+    } : null,
+    system: {
+      memory: process.memoryUsage(),
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }
+  };
+  
+  res.json(debugInfo);
+});
+
 
 app.get('/crawl-all', async (_req, res) => {
-  // Trigger the cron job to crawl all records
-  await triggerAllSearchesFromAirtable();
-  res.status(200).send('✅ Called the API for all records at 0h');
+  try {
+    console.log('🚀 Starting crawl-all operation...');
+    // Send immediate response to client
+    res.status(200).send({ 
+      message: '✅ Crawl-all operation started successfully',
+      timestamp: new Date().toISOString()
+    });
+    
+    // Trigger the crawl operation asynchronously
+    triggerAllSearchesFromAirtable().catch(error => {
+      console.error('❌ Error in crawl-all operation:', error.message);
+    });
+    
+  } catch (error) {
+    console.error('❌ Error starting crawl-all:', error.message);
+    if (!res.headersSent) {
+      res.status(500).send({ 
+        error: '❌ Failed to start crawl-all operation',
+        details: error.message 
+      });
+    }
+  }
 });
 
 app.get('/search', async (req, res) => {
     const params = req.query;
     const recordIdInQueue = params.recordId;
     const crawlStatusParam = params.crawlStatus;
+    
+    // Validate required parameters
+    if (!recordIdInQueue) {
+      return res.status(400).send({ error: '⛔ Missing recordId parameter' });
+    }
+    
     if (crawlStatusParam === STATUS_CRAWLING) {
       return res.status(400).send({ error: '⛔ Request is already in progress' });
     }
-    await updateStatus(recordIdInQueue, STATUS_CRAWLING);
+    
+    // Check if queue is getting too full
+    if (requestQueue.length >= 50) {
+      console.warn(`⚠️ Queue is getting full (${requestQueue.length}/50). Consider throttling.`);
+    }
+    
+    // Update status to crawling
+    try {
+      await updateStatus(recordIdInQueue, STATUS_CRAWLING);
+    } catch (error) {
+      console.error(`❌ Failed to update status for ${recordIdInQueue}:`, error.message);
+      return res.status(500).send({ error: '⛔ Failed to update status' });
+    }
+    
     if (requestQueue.length >= 100) {
-    return res.status(429).send({ error: '⛔ Too many pending requests' });
-  }
+      // Update status back to original if queue is full
+      try {
+        await updateStatus(recordIdInQueue, STATUS_ERROR);
+      } catch (error) {
+        console.error(`❌ Failed to update status for ${recordIdInQueue}:`, error.message);
+      }
+      return res.status(429).send({ error: '⛔ Too many pending requests' });
+    }
 
-  requestQueue.push({ req, res });
-  processQueueToCrawl();
+    // Add request to queue
+    requestQueue.push({ req, res });
+    console.log(`📥 Added request to queue. Queue length: ${requestQueue.length}`);
+    
+    // Process queue
+    processQueueToCrawl();
 });
 
 async function processQueueToCrawl() {
-  if (isProcessingQueue) return;
+  if (isProcessingQueue) {
+    console.log('⏳ Queue is already being processed, skipping...');
+    return;
+  }
+  
   isProcessingQueue = true;
+  lastQueueProcessTime = Date.now();
+  console.log(`🔄 Starting queue processing. Queue length: ${requestQueue.length}`);
+
+  let processedCount = 0;
+  let successCount = 0;
+  let errorCount = 0;
 
   while (requestQueue.length > 0) {
     const { req, res } = requestQueue.shift();
+    processedCount++;
+    lastQueueProcessTime = Date.now();
+    console.log(`📋 Processing request ${processedCount}. Remaining in queue: ${requestQueue.length}`);
 
     const params = req.query;
     recordId = params.recordId;
     const productId = params.productId;
     const snkrdunkApi = params.snkrdunkApi?.replace(/^\/+/, '');
     productType = params.productType || PRODUCT_TYPE.SHOE;
+    
+    // Track current processing request
+    currentProcessingRequest = {
+      productId,
+      startTime: Date.now()
+    };
+    
+    // Validate parameters
     if (!productId || !snkrdunkApi) {
-      return res.status(400).send({ error: '⛔ Invalid Product ID or Product Type' });
+      console.error(`❌ Invalid parameters for record ${recordId}: productId=${productId}, snkrdunkApi=${snkrdunkApi}`);
+      try {
+        await updateStatus(recordId, STATUS_ERROR);
+        if (!res.headersSent) {
+          res.status(400).send({ error: '⛔ Invalid Product ID or Product Type' });
+        }
+      } catch (error) {
+        console.error(`❌ Failed to update status for ${recordId}:`, error.message);
+        if (!res.headersSent) {
+          res.status(500).send({ error: '⛔ Internal server error' });
+        }
+      }
+      errorCount++;
+      currentProcessingRequest = null;
+      continue;
     }
+    
+    // Process each request with proper timeout and error handling
     try {
-
       console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
       const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
       console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
@@ -147,22 +310,54 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
+      
       if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
-        res.status(200).send({ message: '⛔ No data found for the given Product ID' });  
+        await updateStatus(recordId, STATUS_ERROR);
+        if (!res.headersSent) {
+          res.status(200).send({ message: '⛔ No data found for the given Product ID' });  
+        }
+        errorCount++;
       } else {
         await deleteRecordByProductId(productId);
         await pushToAirtable(mergedArr);
-        res.status(200).send({ message: `✅ Done crawling ${productId}` });
+        await updateStatus(recordId, STATUS_SUCCESS);
+        if (!res.headersSent) {
+          res.status(200).send({ message: `✅ Done crawling ${productId}` });
+        }
+        successCount++;
       }
-      await updateStatus(recordId, STATUS_SUCCESS);
+      
     } catch (error) {
-      await updateStatus(recordId, STATUS_ERROR);
       console.error(`❌ Error crawling ${productId}:`, error.message);
-      isProcessingQueue = false;
+      errorCount++;
+      
+      // Always try to update status to ERROR
+      try {
+        await updateStatus(recordId, STATUS_ERROR);
+      } catch (updateError) {
+        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+      }
+      
+      // Send error response if not already sent
+      if (!res.headersSent) {
+        res.status(500).send({ 
+          error: `❌ Error crawling ${productId}: ${error.message}` 
+        });
+      }
     }
+    
+    // Clear current processing request
+    currentProcessingRequest = null;
+    
+    // Always continue to next request regardless of success/failure
+    console.log(`✅ Completed processing ${productId}. Moving to next request...`);
   }
+  
   isProcessingQueue = false;
+  lastQueueProcessTime = Date.now();
+  currentProcessingRequest = null;
+  console.log(`✅ Queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
 }
 
 async function deleteRecordByProductId(productId) {
@@ -233,11 +428,11 @@ async function crawlDataSnkrdunk(apiUrl, productType) {
     await snkrdunkLogin();
     const dataRes = await snkrdunkfetchData(apiUrl);
     const snkrMapped = getSizeAndPriceSnkrdunk(dataRes, productType)
-    console.log(`✅ Extracted Goat data!!!`);
+    console.log(`✅ Extracted Snkrdunk data!!!`);
     console.table(snkrMapped, [SIZE_SNKRDUNK, PRICE_SNKRDUNK]);
     return snkrMapped || [];
   } catch (err) {
-    console.error('Error during Snkrdunk login:', err.message);
+    console.error('Error during Snkrdunk crawl:', err.message);
     throw err;
   }
 }
@@ -252,7 +447,8 @@ async function snkrdunkfetchData(api) {
         'Cookie': cookieHeader,
         'Referer': DOMAIN_SNKRDUNK,
         'Origin': DOMAIN_SNKRDUNK
-      }
+      },
+      timeout: 30000 // 30 second timeout
     });
     if (productType === PRODUCT_TYPE.SHOE) {
       return response?.data?.data || [];
@@ -265,9 +461,15 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId, productType) {
-  const browser = await puppeteer.launch(defaultBrowserArgs);
-  const page = await browser.newPage();
+  let browser = null;
+  let page = null;
   try {
+    browser = await puppeteer.launch(defaultBrowserArgs);
+    page = await browser.newPage();
+    
+    // Set page timeout
+    page.setDefaultTimeout(60000); // 60 seconds timeout
+    
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
@@ -289,14 +491,23 @@ async function crawlDataGoat(productId, productType) {
           return false;
         }
       });
+    
+    // Close the current page and browser before creating a new one for details
+    if (page) await page.close();
+    if (browser) await browser.close();
+    
     const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
-    console.error(`❌ Error crawling ${url}:`, err.message);
+    console.error(`❌ Error crawling ${productId}:`, err.message);
     throw err;
   } finally {
-    await page.close();
-    await browser.close();
+    try {
+      if (page) await page.close();
+      if (browser) await browser.close();
+    } catch (closeError) {
+      console.error('❌ Error closing browser:', closeError.message);
+    }
   }
 }
 
@@ -304,9 +515,17 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
   if (!url || !cellItemIdParam) {
     return [];
   }
-  const  browserChild = await puppeteer.launch(defaultBrowserArgs);
-  const page = await browserChild.newPage();
+  
+  let browserChild = null;
+  let page = null;
+  
   try {
+    browserChild = await puppeteer.launch(defaultBrowserArgs);
+    page = await browserChild.newPage();
+    
+    // Set page timeout
+    page.setDefaultTimeout(60000); // 60 seconds timeout
+    
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
@@ -315,7 +534,9 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
+    
     await page.goto(url, { waitUntil: 'networkidle2' });
+    
     const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
       const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
         credentials: 'include',
@@ -328,6 +549,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
       });
       return res.json();
     }, cellItemIdParam, sizeAndPriceGoatUrl);
+    
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -342,6 +564,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         imgAlt = img.attr('alt');
       }
     });
+    
     const dataFiltered = getSizeAndPriceGoat(response, productType);
     const products = dataFiltered?.map(item => {
       return {
@@ -352,16 +575,20 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         [PRICE_GOAT]: item[PRICE_GOAT]
       }
     });
+    
     console.log(`✅ Extracted Goat data!!!`);
     console.table(products, [PRODUCT_ID, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
   } catch (err) {
-    await updateStatus(recordId, STATUS_ERROR);
     console.error(`❌ Error extract product:`, err.message);
     throw err;
   } finally {
-    await page.close();
-    await browserChild.close();
+    try {
+      if (page) await page.close();
+      if (browserChild) await browserChild.close();
+    } catch (closeError) {
+      console.error('❌ Error closing browser child:', closeError.message);
+    }
   }
 }
 
@@ -513,35 +740,6 @@ cron.schedule('0 0 * * *', async () => {
   await triggerAllSearchesFromAirtable();
 });
 
-// async function triggerAllSearchesFromAirtable() {
-//     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
-//     if (records.length === 0) {
-//       console.warn('⚠️ No records found in the Airtable table.');
-//       return;
-//     }
-//     for (const record of records) {
-//       const recordIdCallAll = record.id;
-//       const productId = record.get(PRODUCT_ID);
-//       const snkrdunkApi = record.get('Snkrdunk API');
-//       const productType = record.get('Product Type');
-
-//       if (!productId || !snkrdunkApi) {
-//         console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordIdCallAll}`);
-//         continue;
-//       }
-
-//       const url = `https://${process.env.MAIN_URL}/search?recordId=${encodeURIComponent(recordIdCallAll)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
-
-//       try {
-//         console.log(`📤 Triggering crawl for ${productId}`);
-//         await axios.get(url, { timeout: 900000 });
-//       } catch (err) {
-//         console.error(`❌ Error calling /search for ${productId}:`, err.message);
-//         await updateStatus(recordIdCallAll, STATUS_ERROR);
-//       }
-//     }
-// }
-
 async function triggerAllSearchesFromAirtable() {
   try {
     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
@@ -550,59 +748,125 @@ async function triggerAllSearchesFromAirtable() {
       return;
     }
 
-    const limit = pLimit(CONCURRENCY_LIMIT);
+    console.log(`📋 Found ${records.length} records to process`);
 
-    const tasks = records.map((record) =>
-      limit(async () => {
-        const recordId = record.id;
-        const productId = record.get(PRODUCT_ID);
-        const snkrdunkApi = record.get('Snkrdunk API');
-        const productType = record.get('Product Type');
+    // Reduce concurrency limit to prevent resource exhaustion
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 2);
+    const limit = pLimit(adjustedConcurrencyLimit);
 
-        if (!productId || !snkrdunkApi) {
-          console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
-          return {
-            status: 'skipped',
-            productId,
-          };
-        }
+    // Process records in smaller batches to prevent overwhelming the system
+    const batchSize = 5;
+    const batches = [];
+    
+    for (let i = 0; i < records.length; i += batchSize) {
+      batches.push(records.slice(i, i + batchSize));
+    }
 
-        const url = `http://localhost:${PORT}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+    console.log(`📦 Processing ${records.length} records in ${batches.length} batches`);
 
-        console.log(`📤 Triggering crawl for ${productId}`);
+    let totalSuccessCount = 0;
+    let totalErrorCount = 0;
+    let totalSkippedCount = 0;
 
-        try {
-          await axios.get(url, { timeout: 900000 });
-          return {
-            status: 'fulfilled',
-            productId,
-          };
-        } catch (err) {
-          return {
-            status: 'rejected',
-            productId,
-            reason: err.message,
-          };
-        }
-      })
-    );
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      console.log(`🔄 Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} records`);
 
-    const results = await Promise.allSettled(tasks);
+      const tasks = batch.map((record) =>
+        limit(async () => {
+          const recordId = record.id;
+          const productId = record.get(PRODUCT_ID);
+          const snkrdunkApi = record.get('Snkrdunk API');
+          const productType = record.get('Product Type');
 
-    results.forEach((result) => {
-      if (result.status === 'fulfilled') {
-        const { status, productId, reason } = result.value;
-        if (status === 'rejected') {
-          console.error(`❌ Lỗi với sản phẩm ${productId}: ${reason}`);
-        } else if (status === 'skipped') {
-          console.warn(`⚠️ Bỏ qua sản phẩm không đủ dữ liệu: ${productId}`);
+          if (!productId || !snkrdunkApi) {
+            console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
+            return {
+              status: 'skipped',
+              productId,
+            };
+          }
+
+          // Use the actual server URL instead of localhost
+          const baseUrl = process.env.MAIN_URL || `http://localhost:${PORT}`;
+          const url = `${baseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+
+          console.log(`📤 Triggering crawl for ${productId} (${recordId})`);
+
+          try {
+            const response = await axios.get(url, { 
+              timeout: 900000,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (compatible; CrawlBot/1.0)',
+                'Accept': 'application/json'
+              }
+            });
+            
+            console.log(`✅ Successfully triggered crawl for ${productId}: ${response.status}`);
+            
+            return {
+              status: 'fulfilled',
+              productId,
+              response: response.data
+            };
+          } catch (err) {
+            console.error(`❌ Error calling /search for ${productId}:`, err.message);
+            // Update status to error if the request fails
+            try {
+              await updateStatus(recordId, STATUS_ERROR);
+            } catch (updateErr) {
+              console.error(`❌ Failed to update status for ${recordId}:`, updateErr.message);
+            }
+            return {
+              status: 'rejected',
+              productId,
+              reason: err.message,
+            };
+          }
+        })
+      );
+
+      const results = await Promise.allSettled(tasks);
+
+      let batchSuccessCount = 0;
+      let batchErrorCount = 0;
+      let batchSkippedCount = 0;
+
+      results.forEach(async (result) => {
+        if (result.status === 'fulfilled') {
+          const { status, productId, reason } = result.value;
+          if (status === 'rejected') {
+            console.error(`❌ Lỗi với sản phẩm ${productId}: ${reason}`);
+            batchErrorCount++;
+            await updateStatus(recordId, STATUS_ERROR);
+          } else if (status === 'skipped') {
+            console.warn(`⚠️ Bỏ qua sản phẩm không đủ dữ liệu: ${productId}`);
+            batchSkippedCount++;
+          } else {
+            console.log(`✅ Đã crawl xong: ${productId}`);
+            batchSuccessCount++;
+          }
         } else {
-          console.log(`✅ Đã crawl xong: ${productId}`);
+          console.error(`❌ Promise thất bại ngoài mong đợi`, result.reason);
+          batchErrorCount++;
         }
-      } else {
-        console.error(`❌ Promise thất bại ngoài mong đợi`, result.reason);
+      });
+
+      totalSuccessCount += batchSuccessCount;
+      totalErrorCount += batchErrorCount;
+      totalSkippedCount += batchSkippedCount;
+
+      console.log(`📊 Batch ${batchIndex + 1} Summary: ${batchSuccessCount} success, ${batchErrorCount} errors, ${batchSkippedCount} skipped`);
+
+      // Add delay between batches to prevent resource exhaustion
+      if (batchIndex < batches.length - 1) {
+        console.log(`⏳ Waiting 2 seconds before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
-    });
+    }
+
+    console.log(`📊 Final Crawl Summary: ${totalSuccessCount} success, ${totalErrorCount} errors, ${totalSkippedCount} skipped`);
+    
   } catch (err) {
     console.error('❌ Lỗi khi lấy record từ Airtable:', err.message);
     throw err;
