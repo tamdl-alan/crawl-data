@@ -742,6 +742,13 @@ cron.schedule('0 0 * * *', async () => {
 
 async function triggerAllSearchesFromAirtable() {
   try {
+    // Debug environment variables
+    console.log(`🔧 Environment check:`, {
+      MAIN_URL: process.env.MAIN_URL,
+      PORT: PORT,
+      DATA_SEARCH_TABLE: process.env.DATA_SEARCH_TABLE
+    });
+    
     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
     if (records.length === 0) {
       console.warn('⚠️ No records found in the Airtable table.');
@@ -778,6 +785,14 @@ async function triggerAllSearchesFromAirtable() {
           const productId = record.get(PRODUCT_ID);
           const snkrdunkApi = record.get('Snkrdunk API');
           const productType = record.get('Product Type');
+          
+          // Debug logging
+          console.log(`🔍 Record data:`, {
+            recordId,
+            productId,
+            snkrdunkApi,
+            productType
+          });
 
           if (!productId || !snkrdunkApi) {
             console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
@@ -786,12 +801,57 @@ async function triggerAllSearchesFromAirtable() {
               productId,
             };
           }
+          
+          // Validate that values are strings and not empty
+          if (typeof productId !== 'string' || productId.trim() === '') {
+            console.warn(`⚠️ Invalid productId for record ${recordId}: ${productId}`);
+            return {
+              status: 'skipped',
+              productId,
+              reason: 'Invalid productId'
+            };
+          }
+          
+          if (typeof snkrdunkApi !== 'string' || snkrdunkApi.trim() === '') {
+            console.warn(`⚠️ Invalid snkrdunkApi for record ${recordId}: ${snkrdunkApi}`);
+            return {
+              status: 'skipped',
+              productId,
+              reason: 'Invalid snkrdunkApi'
+            };
+          }
 
           // Use the actual server URL instead of localhost
-          const baseUrl = process.env.MAIN_URL || `http://localhost:${PORT}`;
-          const url = `${baseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType)}`;
+          const baseUrl = process.env.MAIN_URL || `http://localhost:${PORT || 3000}`;
+          
+          // Validate baseUrl
+          if (!baseUrl || baseUrl === 'undefined') {
+            console.error(`❌ Invalid baseUrl: ${baseUrl}`);
+            return {
+              status: 'rejected',
+              productId,
+              reason: 'Invalid baseUrl configuration',
+            };
+          }
+          
+          // Ensure baseUrl doesn't end with slash
+          const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+          const url = `${cleanBaseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType || PRODUCT_TYPE.SHOE)}`;
+          
+          // Validate URL
+          try {
+            new URL(url);
+          } catch (urlError) {
+            console.error(`❌ Invalid URL generated: ${url}`);
+            return {
+              status: 'rejected',
+              productId,
+              reason: `Invalid URL: ${urlError.message}`,
+            };
+          }
 
           console.log(`📤 Triggering crawl for ${productId} (${recordId})`);
+          console.log(`🔗 URL: ${url}`);
 
           try {
             const response = await axios.get(url, { 
@@ -803,14 +863,19 @@ async function triggerAllSearchesFromAirtable() {
             });
             
             console.log(`✅ Successfully triggered crawl for ${productId}: ${response.status}`);
-            
             return {
               status: 'fulfilled',
               productId,
               response: response.data
             };
           } catch (err) {
-            console.error(`❌ Error calling /search for ${productId}:`, err.message);
+            console.error(`❌ Error calling for ${productId}:`, err.message);
+            console.error(`❌ Error details:`, {
+              code: err.code,
+              status: err.response?.status,
+              statusText: err.response?.statusText,
+              url: url
+            });
             // Update status to error if the request fails
             try {
               await updateStatus(recordId, STATUS_ERROR);
@@ -832,13 +897,12 @@ async function triggerAllSearchesFromAirtable() {
       let batchErrorCount = 0;
       let batchSkippedCount = 0;
 
-      results.forEach(async (result) => {
+      results.forEach((result) => {
         if (result.status === 'fulfilled') {
           const { status, productId, reason } = result.value;
           if (status === 'rejected') {
             console.error(`❌ Lỗi với sản phẩm ${productId}: ${reason}`);
             batchErrorCount++;
-            await updateStatus(recordId, STATUS_ERROR);
           } else if (status === 'skipped') {
             console.warn(`⚠️ Bỏ qua sản phẩm không đủ dữ liệu: ${productId}`);
             batchSkippedCount++;
