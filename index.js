@@ -748,7 +748,7 @@ async function triggerAllSearchesFromAirtable() {
       PORT: PORT,
       DATA_SEARCH_TABLE: process.env.DATA_SEARCH_TABLE
     });
-    
+
     const records = await base(process.env.DATA_SEARCH_TABLE).select().all();
     if (records.length === 0) {
       console.warn('⚠️ No records found in the Airtable table.');
@@ -839,16 +839,16 @@ async function triggerAllSearchesFromAirtable() {
           const url = `${cleanBaseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType || PRODUCT_TYPE.SHOE)}`;
           
           // Validate URL
-          try {
-            new URL(url);
-          } catch (urlError) {
-            console.error(`❌ Invalid URL generated: ${url}`);
-            return {
-              status: 'rejected',
-              productId,
-              reason: `Invalid URL: ${urlError.message}`,
-            };
-          }
+          // try {
+          //   new URL(url);
+          // } catch (urlError) {
+          //   console.error(`❌ Invalid URL generated: ${url}`);
+          //   return {
+          //     status: 'rejected',
+          //     productId,
+          //     reason: `Invalid URL: ${urlError.message}`,
+          //   };
+          // }
 
           console.log(`📤 Triggering crawl for ${productId} (${recordId})`);
           console.log(`🔗 URL: ${url}`);
