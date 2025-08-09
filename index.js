@@ -154,29 +154,6 @@ app.get('/queue-info', (_req, res) => {
   res.json(queueInfo);
 });
 
-app.get('/queue-debug', (_req, res) => {
-  const debugInfo = {
-    queue: {
-      length: requestQueue.length,
-      isProcessing: isProcessingQueue,
-      lastProcessTime: new Date(lastQueueProcessTime).toISOString(),
-      timeSinceLastProcess: Date.now() - lastQueueProcessTime
-    },
-    currentRequest: currentProcessingRequest ? {
-      productId: currentProcessingRequest.productId,
-      startTime: new Date(currentProcessingRequest.startTime).toISOString(),
-      processingTime: Date.now() - currentProcessingRequest.startTime
-    } : null,
-    system: {
-      memory: process.memoryUsage(),
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString()
-    }
-  };
-  
-  res.json(debugInfo);
-});
-
 
 app.get('/crawl-all', async (_req, res) => {
   try {
@@ -747,7 +724,7 @@ app.listen(PORT, async () => {
 });
 
 cron.schedule(process.env.CRON_SCHEDULE || '0 * * * *', async () => {
-  console.log('⏰ Running scheduled crawl at 0h');
+  console.log('⏰ Running scheduled crawl at' + new Date());
   await triggerAllSearchesFromAirtable();
 });
 
