@@ -310,7 +310,6 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
-      
       if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
         await updateStatus(recordId, STATUS_ERROR);
@@ -487,32 +486,33 @@ async function crawlDataGoat(productId, productType) {
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
-          cellItemId = $(el).attr('data-grid-cell-name');
           return false;
         }
       });
-    
+      if (!fullLink && productType === PRODUCT_TYPE.CLOTHES) {
+        fullLink = goalDomain + '/' + productId?.replace(/^\/+/, '');
+      }
+      console.log('🚀 ~ fullLink:', fullLink);
     // Close the current page and browser before creating a new one for details
-    if (page) await page.close();
-    if (browser) await browser.close();
-    
-    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
+    // if (page) await page.close();
+    // if (browser) await browser.close();
+    const details = await extractDetailsFromProductGoat(fullLink, productId);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${productId}:`, err.message);
     throw err;
   } finally {
     try {
-      if (page) await page.close();
-      if (browser) await browser.close();
+      if (page) await page?.close();
+      if (browser) await browser?.close();
     } catch (closeError) {
       console.error('❌ Error closing browser:', closeError.message);
     }
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
-  if (!url || !cellItemIdParam) {
+async function extractDetailsFromProductGoat(url, productId) {
+  if (!url) {
     return [];
   }
   
@@ -522,23 +522,34 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
   try {
     browserChild = await puppeteer.launch(defaultBrowserArgs);
     page = await browserChild.newPage();
-    
+
     // Set page timeout
-    page.setDefaultTimeout(60000); // 60 seconds timeout
-    
+    page.setDefaultTimeout(120000); // 60 seconds timeout
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
-
     await page.setCookie(
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    
+    let reqUrl = '';
+    page.on('request', request => {
+      const url = request.url();
+      if (url.includes(sizeAndPriceGoatUrl)) {
+        reqUrl = url;
+        return;
+      }
+    });
     await page.goto(url, { waitUntil: 'networkidle2' });
-    
-    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
-      const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
+
+    if (!reqUrl) {
+      await updateStatus(recordId, STATUS_ERROR);
+      console.error('No request URL found');
+      throw new Error('No request URL found');
+    }
+
+    const response = await page.evaluate(async (reqUrl) => {
+      const res = await fetch(`${reqUrl}`, {
         credentials: 'include',
         headers: {
           'Accept-Language':	'en-US,en;q=0.9',
@@ -548,7 +559,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         }
       });
       return res.json();
-    }, cellItemIdParam, sizeAndPriceGoatUrl);
+    }, reqUrl);
     
     const html = await page.content();
     const $ = cheerio.load(html);
@@ -732,10 +743,10 @@ function conditionCheckSize(sizeItem, nameItem) {
 }
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Listening on port ${PORT} for Sy`);
+  console.log(`🚀 Listening on port ${PORT}: ${process.env.DATA_SEARCH_TABLE}`);
 });
 
-cron.schedule('0 0 * * *', async () => {
+cron.schedule(process.env.CRON_SCHEDULE || '0 * * * *', async () => {
   console.log('⏰ Running scheduled crawl at 0h');
   await triggerAllSearchesFromAirtable();
 });
