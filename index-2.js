@@ -43,7 +43,20 @@ const defaultBrowserArgs = {
     "--disable-setuid-sandbox",
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-gpu,"
+    "--disable-gpu",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=TranslateUI",
+    "--disable-ipc-flooding-protection",
+    "--disable-extensions",
+    "--disable-plugins",
+    "--disable-images",
+    "--disable-javascript",
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor",
+    "--memory-pressure-off",
+    "--max_old_space_size=4096"
   ]
 }
 
@@ -54,7 +67,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 2; // Số lượng request đồng thời
+const CONCURRENCY_LIMIT = 1; // Giảm xuống 1 để tránh quá tải
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -96,6 +109,59 @@ let isProcessingQueue = false;
 let lastQueueProcessTime = Date.now();
 let currentProcessingRequest = null;
 
+// Browser instance management
+let activeBrowsers = new Set();
+let browserLaunchSemaphore = 0;
+const MAX_CONCURRENT_BROWSERS = 3;
+const BROWSER_LAUNCH_TIMEOUT = 30000; // 30 seconds
+
+// Browser cleanup function
+async function cleanupBrowser(browser) {
+  try {
+    if (browser && !browser.process()?.killed) {
+      await browser.close();
+    }
+  } catch (error) {
+    console.warn('⚠️ Warning when closing browser:', error.message);
+  } finally {
+    activeBrowsers.delete(browser);
+    browserLaunchSemaphore--;
+  }
+}
+
+// Safe browser launch function
+async function safeLaunchBrowser() {
+  if (browserLaunchSemaphore >= MAX_CONCURRENT_BROWSERS) {
+    throw new Error('Too many concurrent browsers');
+  }
+  
+  browserLaunchSemaphore++;
+  let browser = null;
+  
+  try {
+    browser = await puppeteer.launch({
+      ...defaultBrowserArgs,
+      timeout: BROWSER_LAUNCH_TIMEOUT
+    });
+    activeBrowsers.add(browser);
+    return browser;
+  } catch (error) {
+    browserLaunchSemaphore--;
+    throw error;
+  }
+}
+
+// Safe page close function
+async function safeClosePage(page) {
+  try {
+    if (page && !page.isClosed()) {
+      await page.close();
+    }
+  } catch (error) {
+    console.warn('⚠️ Warning when closing page:', error.message);
+  }
+}
+
 // Queue health check
 setInterval(() => {
   const now = Date.now();
@@ -116,9 +182,20 @@ setInterval(() => {
   
   // Log queue status every 5 minutes
   if (now % (5 * 60 * 1000) < 1000) {
-    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s`);
+    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, activeBrowsers=${activeBrowsers.size}, browserSemaphore=${browserLaunchSemaphore}`);
   }
 }, 60000); // Check every minute
+
+// Periodic browser cleanup
+setInterval(async () => {
+  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
+    console.warn(`⚠️ Too many active browsers (${activeBrowsers.size}), cleaning up...`);
+    const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
+    for (const browser of browsersToClose) {
+      await cleanupBrowser(browser);
+    }
+  }
+}, 30000); // Check every 30 seconds
 
 app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
@@ -152,6 +229,56 @@ app.get('/queue-info', (_req, res) => {
   
   console.log('📊 Queue Info:', queueInfo);
   res.json(queueInfo);
+});
+
+app.get('/queue-debug', (_req, res) => {
+  const debugInfo = {
+    queue: {
+      length: requestQueue.length,
+      isProcessing: isProcessingQueue,
+      lastProcessTime: new Date(lastQueueProcessTime).toISOString(),
+      timeSinceLastProcess: Date.now() - lastQueueProcessTime
+    },
+    currentRequest: currentProcessingRequest ? {
+      productId: currentProcessingRequest.productId,
+      startTime: new Date(currentProcessingRequest.startTime).toISOString(),
+      processingTime: Date.now() - currentProcessingRequest.startTime
+    } : null,
+    browsers: {
+      activeCount: activeBrowsers.size,
+      semaphore: browserLaunchSemaphore,
+      maxConcurrent: MAX_CONCURRENT_BROWSERS
+    },
+    system: {
+      memory: process.memoryUsage(),
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }
+  };
+  
+  res.json(debugInfo);
+});
+
+app.get('/cleanup-browsers', async (_req, res) => {
+  try {
+    const browserCount = activeBrowsers.size;
+    const browsersToClose = Array.from(activeBrowsers);
+    
+    for (const browser of browsersToClose) {
+      await cleanupBrowser(browser);
+    }
+    
+    res.json({
+      message: `✅ Cleaned up ${browserCount} browsers`,
+      remainingBrowsers: activeBrowsers.size,
+      semaphore: browserLaunchSemaphore
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to cleanup browsers',
+      details: error.message
+    });
+  }
 });
 
 
@@ -287,6 +414,7 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
+      
       if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
         await updateStatus(recordId, STATUS_ERROR);
@@ -306,6 +434,22 @@ async function processQueueToCrawl() {
       
     } catch (error) {
       console.error(`❌ Error crawling ${productId}:`, error.message);
+      
+      // Check if it's a browser resource error
+      if (error.message.includes('Failed to launch') || error.message.includes('Resource temporarily unavailable')) {
+        console.warn(`⚠️ Browser resource error for ${productId}, cleaning up browsers...`);
+        try {
+          const browsersToClose = Array.from(activeBrowsers);
+          for (const browser of browsersToClose) {
+            await cleanupBrowser(browser);
+          }
+          // Wait a bit before continuing
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } catch (cleanupError) {
+          console.error('❌ Error during browser cleanup:', cleanupError.message);
+        }
+      }
+      
       errorCount++;
       
       // Always try to update status to ERROR
@@ -440,7 +584,7 @@ async function crawlDataGoat(productId, productType) {
   let browser = null;
   let page = null;
   try {
-    browser = await puppeteer.launch(defaultBrowserArgs);
+    browser = await safeLaunchBrowser();
     page = await browser.newPage();
     
     // Set page timeout
@@ -463,6 +607,7 @@ async function crawlDataGoat(productId, productType) {
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
+          cellItemId = $(el).attr('data-grid-cell-name');
           return false;
         }
       });
@@ -470,9 +615,7 @@ async function crawlDataGoat(productId, productType) {
         fullLink = goalDomain + '/' + productId?.replace(/^\/+/, '');
       }
       console.log('🚀 ~ fullLink:', fullLink);
-    // Close the current page and browser before creating a new one for details
-    // if (page) await page.close();
-    // if (browser) await browser.close();
+    
     const details = await extractDetailsFromProductGoat(fullLink, productId);
     return details;
   } catch (err) {
@@ -480,8 +623,8 @@ async function crawlDataGoat(productId, productType) {
     throw err;
   } finally {
     try {
-      if (page) await page?.close();
-      if (browser) await browser?.close();
+      if (page) await safeClosePage(page);
+      if (browser) await cleanupBrowser(browser);
     } catch (closeError) {
       console.error('❌ Error closing browser:', closeError.message);
     }
@@ -497,11 +640,11 @@ async function extractDetailsFromProductGoat(url, productId) {
   let page = null;
   
   try {
-    browserChild = await puppeteer.launch(defaultBrowserArgs);
+    browserChild = await safeLaunchBrowser();
     page = await browserChild.newPage();
 
     // Set page timeout
-    page.setDefaultTimeout(120000); // 60 seconds timeout
+    page.setDefaultTimeout(120000); // 120 seconds timeout
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
@@ -572,8 +715,8 @@ async function extractDetailsFromProductGoat(url, productId) {
     throw err;
   } finally {
     try {
-      if (page) await page.close();
-      if (browserChild) await browserChild.close();
+      if (page) await safeClosePage(page);
+      if (browserChild) await cleanupBrowser(browserChild);
     } catch (closeError) {
       console.error('❌ Error closing browser child:', closeError.message);
     }
@@ -864,6 +1007,20 @@ async function triggerAllSearchesFromAirtable() {
               statusText: err.response?.statusText,
               url: url
             });
+            
+            // If it's a 500 error, it might be due to browser resource issues
+            if (err.response?.status === 500) {
+              console.warn(`⚠️ 500 error for ${productId}, might be browser resource issue`);
+              // Clean up browsers if we have too many
+              if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
+                console.warn(`⚠️ Cleaning up browsers due to 500 error...`);
+                const browsersToClose = Array.from(activeBrowsers);
+                for (const browser of browsersToClose) {
+                  await cleanupBrowser(browser);
+                }
+              }
+            }
+            
             // Update status to error if the request fails
             try {
               await updateStatus(recordId, STATUS_ERROR);
