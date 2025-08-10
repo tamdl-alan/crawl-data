@@ -144,8 +144,7 @@ let lastCrawlAllEndTime = null;
 const CRAWL_ALL_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between crawl-all
 
 // ====== Login protection ====== //
-let isLoginInProgress = false;
-let loginStartTime = null;
+// Removed login protection to avoid interference with login process
 
 // Browser instance management - RESOURCE OPTIMIZED
 let activeBrowsers = new Set();
@@ -323,21 +322,12 @@ setInterval(() => {
   }
 }, 60000); // Check every 1 minute (increased frequency for better monitoring)
 
-// Periodic browser cleanup - ENHANCED with memory monitoring and login protection
+// Periodic browser cleanup - ENHANCED with memory monitoring
 setInterval(async () => {
   // Check memory usage
   const memUsage = process.memoryUsage();
   const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
   const rssMB = Math.round(memUsage.rss / 1024 / 1024);
-  
-  // Don't cleanup if login is in progress
-  if (isLoginInProgress) {
-    const loginDuration = Date.now() - loginStartTime;
-    if (loginDuration < 60000) { // Don't cleanup during first 60 seconds of login
-      console.log(`🔒 Login in progress (${Math.round(loginDuration/1000)}s), skipping cleanup`);
-      return;
-    }
-  }
   
   // Cleanup if memory usage is high or too many browsers
   if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS + 1 || heapUsedMB > 400 || rssMB > 800) {
@@ -624,20 +614,12 @@ app.get('/crawl-all-status', (_req, res) => {
 });
 
 app.get('/login-status', (_req, res) => {
-  const now = Date.now();
   const status = {
-    isLoginInProgress: isLoginInProgress,
     hasCookies: !!cookieHeader,
     retryCount: retryCount,
     maxRetries: RETRY_LIMIT,
     timestamp: new Date().toISOString()
   };
-  
-  if (isLoginInProgress && loginStartTime) {
-    const loginDuration = now - loginStartTime;
-    status.loginDuration = loginDuration;
-    status.loginDurationSeconds = Math.round(loginDuration / 1000);
-  }
   
   res.json(status);
 });
@@ -1457,86 +1439,32 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
-  let browser = null;
-  let page = null;
-  
+  const browser = await puppeteer.launch(defaultBrowserArgs);
   try {
     if (cookieHeader) {
-      console.log('✅ Using existing Snkrdunk cookies');
-      return;
+      return
     }
-    
-    // Set login protection
-    isLoginInProgress = true;
-    loginStartTime = Date.now();
-    
-    console.log('🔐 Starting Snkrdunk login...');
-    
-    // Use safeLaunchBrowser instead of direct puppeteer.launch
-    browser = await safeLaunchBrowser();
-    page = await browser.newPage();
-    
-    // Set timeout for login process
-    page.setDefaultTimeout(60000); // 60 seconds for login
-    
+    const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
-    await page.setUserAgent(userAgent);
-    await page.setExtraHTTPHeaders(extraHTTPHeaders);
-    
-    console.log('🌐 Navigating to Snkrdunk login page...');
-    await page.goto(LOGIN_PAGE_SNKRDUNK, { 
-      waitUntil: 'networkidle2',
-      timeout: 30000 
-    });
-    
-    console.log('📝 Filling login form...');
-    await page.waitForSelector('input[name="email"]', { timeout: 10000 });
+    await page.goto(LOGIN_PAGE_SNKRDUNK, { waitUntil: 'networkidle2' });
     await page.type('input[name="email"]', EMAIL_SNKRDUNK, { delay: 100 });
     await page.type('input[name="password"]', PASSWORD_SNKRDUNK, { delay: 100 });
-    
-    console.log('🚀 Submitting login form...');
     await page.evaluate(() => document.querySelector('form').submit());
-    
-    // Wait for navigation after login
-    await page.waitForNavigation({ 
-      waitUntil: 'networkidle2',
-      timeout: 30000 
-    });
-    
-    console.log('🍪 Extracting cookies...');
     const cookies = await page.cookies();
     cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    
-    console.log('✅ Snkrdunk login successful!');
     retryCount = 0; // Reset retry count on successful login
-    
   } catch (err) {
-    console.error('❌ Snkrdunk login failed:', err.message);
-    
-    // Clear cookies on failure
-    cookieHeader = '';
-    retryCount++;
-    
-    if (retryCount < RETRY_LIMIT) {
-      console.log(`🔄 Retrying login (${retryCount}/${RETRY_LIMIT})...`);
-      // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await snkrdunkLogin();
-    } else {
-      console.error(`❌ Max login retries (${RETRY_LIMIT}) reached`);
+      console.error('Snkrdunk login failed:', err.message);
+      // Retry login if it fails
+      cookieHeader = '';
+      retryCount++;
+      if (retryCount < RETRY_LIMIT) {
+        console.log(`Retrying login (${retryCount}/${RETRY_LIMIT})...`);
+        await snkrdunkLogin();
+      }
       throw err;
-    }
   } finally {
-    // Clear login protection
-    isLoginInProgress = false;
-    loginStartTime = null;
-    
-    try {
-      if (page) await safeClosePage(page);
-      if (browser) await cleanupBrowser(browser);
-    } catch (closeError) {
-      console.error('❌ Error closing browser during login:', closeError.message);
-    }
+      await browser.close();
   }
 }
 
