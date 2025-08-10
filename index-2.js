@@ -109,6 +109,10 @@ let isProcessingQueue = false;
 let lastQueueProcessTime = Date.now();
 let currentProcessingRequest = null;
 
+// Retry mechanism
+const MAX_RETRIES = 2;
+const failedRecords = new Map(); // Map to track failed records and their retry count
+
 // Browser instance management
 let activeBrowsers = new Set();
 let browserLaunchSemaphore = 0;
@@ -281,6 +285,30 @@ app.get('/cleanup-browsers', async (_req, res) => {
   }
 });
 
+app.get('/retry-stats', (_req, res) => {
+  const stats = {
+    failedRecords: Array.from(failedRecords.entries()).map(([recordId, retryCount]) => ({
+      recordId,
+      retryCount
+    })),
+    totalFailedRecords: failedRecords.size,
+    maxRetries: MAX_RETRIES,
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json(stats);
+});
+
+app.post('/reset-failed-records', (_req, res) => {
+  const clearedCount = failedRecords.size;
+  failedRecords.clear();
+  
+  res.json({
+    message: `✅ Cleared ${clearedCount} failed records`,
+    timestamp: new Date().toISOString()
+  });
+});
+
 
 app.get('/crawl-all', async (_req, res) => {
   try {
@@ -365,6 +393,7 @@ async function processQueueToCrawl() {
   let processedCount = 0;
   let successCount = 0;
   let errorCount = 0;
+  let retryCount = 0;
 
   while (requestQueue.length > 0) {
     const { req, res } = requestQueue.shift();
@@ -403,67 +432,93 @@ async function processQueueToCrawl() {
       continue;
     }
     
-    // Process each request with proper timeout and error handling
-    try {
-      console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
-      const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
-      console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
-
-      console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}]------------`);
-      const dataGoat = await crawlDataGoat(productId, productType);
-      console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
-
-      const mergedArr = mergeData(dataSnk, dataGoat);
-      
-      if (!mergedArr?.length) {
-        console.warn(`⚠️ No data found for Product ID: ${productId}`);
-        await updateStatus(recordId, STATUS_ERROR);
-        if (!res.headersSent) {
-          res.status(200).send({ message: '⛔ No data found for the given Product ID' });  
-        }
-        errorCount++;
-      } else {
-        await deleteRecordByProductId(productId);
-        await pushToAirtable(mergedArr);
-        await updateStatus(recordId, STATUS_SUCCESS);
-        if (!res.headersSent) {
-          res.status(200).send({ message: `✅ Done crawling ${productId}` });
-        }
-        successCount++;
-      }
-      
-    } catch (error) {
-      console.error(`❌ Error crawling ${productId}:`, error.message);
-      
-      // Check if it's a browser resource error
-      if (error.message.includes('Failed to launch') || error.message.includes('Resource temporarily unavailable')) {
-        console.warn(`⚠️ Browser resource error for ${productId}, cleaning up browsers...`);
-        try {
-          const browsersToClose = Array.from(activeBrowsers);
-          for (const browser of browsersToClose) {
-            await cleanupBrowser(browser);
-          }
-          // Wait a bit before continuing
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        } catch (cleanupError) {
-          console.error('❌ Error during browser cleanup:', cleanupError.message);
-        }
-      }
-      
-      errorCount++;
-      
-      // Always try to update status to ERROR
+    // Process each request with retry logic
+    let retryAttempt = 0;
+    let success = false;
+    
+    while (retryAttempt <= MAX_RETRIES && !success) {
       try {
-        await updateStatus(recordId, STATUS_ERROR);
-      } catch (updateError) {
-        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
-      }
-      
-      // Send error response if not already sent
-      if (!res.headersSent) {
-        res.status(500).send({ 
-          error: `❌ Error crawling ${productId}: ${error.message}` 
-        });
+        if (retryAttempt > 0) {
+          console.log(`🔄 Retry attempt ${retryAttempt}/${MAX_RETRIES} for ${productId}`);
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 5000 * retryAttempt));
+        }
+        
+        console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
+        const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
+        console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
+
+        console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}]------------`);
+        const dataGoat = await crawlDataGoat(productId, productType);
+        console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
+
+        const mergedArr = mergeData(dataSnk, dataGoat);
+        
+        if (!mergedArr?.length) {
+          console.warn(`⚠️ No data found for Product ID: ${productId}`);
+          await updateStatus(recordId, STATUS_ERROR);
+          if (!res.headersSent) {
+            res.status(200).send({ message: '⛔ No data found for the given Product ID' });  
+          }
+          errorCount++;
+          success = true; // Mark as "processed" even if no data found
+        } else {
+          await deleteRecordByProductId(productId);
+          await pushToAirtable(mergedArr);
+          await updateStatus(recordId, STATUS_SUCCESS);
+          if (!res.headersSent) {
+            res.status(200).send({ message: `✅ Done crawling ${productId}` });
+          }
+          successCount++;
+          success = true;
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error crawling ${productId} (attempt ${retryAttempt + 1}):`, error.message);
+        
+        // Check if it's a browser resource error
+        if (error.message.includes('Failed to launch') || error.message.includes('Resource temporarily unavailable')) {
+          console.warn(`⚠️ Browser resource error for ${productId}, cleaning up browsers...`);
+          try {
+            const browsersToClose = Array.from(activeBrowsers);
+            for (const browser of browsersToClose) {
+              await cleanupBrowser(browser);
+            }
+            // Wait a bit before continuing
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          } catch (cleanupError) {
+            console.error('❌ Error during browser cleanup:', cleanupError.message);
+          }
+        }
+        
+        retryAttempt++;
+        
+        if (retryAttempt > MAX_RETRIES) {
+          // Max retries reached, mark as failed
+          errorCount++;
+          retryCount++;
+          
+          // Track failed record
+          failedRecords.set(recordId, retryAttempt);
+          
+          // Always try to update status to ERROR
+          try {
+            await updateStatus(recordId, STATUS_ERROR);
+          } catch (updateError) {
+            console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+          }
+          
+          // Send error response if not already sent
+          if (!res.headersSent) {
+            res.status(500).send({ 
+              error: `❌ Error crawling ${productId} after ${MAX_RETRIES} retries: ${error.message}` 
+            });
+          }
+          
+          console.log(`❌ Failed to process ${productId} after ${MAX_RETRIES} retries, moving to next record`);
+        } else {
+          console.log(`⏳ Will retry ${productId} (${retryAttempt}/${MAX_RETRIES})`);
+        }
       }
     }
     
@@ -477,7 +532,7 @@ async function processQueueToCrawl() {
   isProcessingQueue = false;
   lastQueueProcessTime = Date.now();
   currentProcessingRequest = null;
-  console.log(`✅ Queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
+  console.log(`✅ Queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}, Retries: ${retryCount}`);
 }
 
 async function deleteRecordByProductId(productId) {
@@ -969,69 +1024,78 @@ async function triggerAllSearchesFromAirtable() {
           const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
           const url = `${cleanBaseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType || PRODUCT_TYPE.SHOE)}`;
           
-          // Validate URL
-          // try {
-          //   new URL(url);
-          // } catch (urlError) {
-          //   console.error(`❌ Invalid URL generated: ${url}`);
-          //   return {
-          //     status: 'rejected',
-          //     productId,
-          //     reason: `Invalid URL: ${urlError.message}`,
-          //   };
-          // }
-
           console.log(`📤 Triggering crawl for ${productId} (${recordId})`);
           console.log(`🔗 URL: ${url}`);
 
-          try {
-            const response = await axios.get(url, { 
-              timeout: 900000,
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; CrawlBot/1.0)',
-                'Accept': 'application/json'
+          // Retry logic for API calls
+          let retryAttempt = 0;
+          const maxApiRetries = 2;
+          
+          while (retryAttempt <= maxApiRetries) {
+            try {
+              if (retryAttempt > 0) {
+                console.log(`🔄 API Retry attempt ${retryAttempt}/${maxApiRetries} for ${productId}`);
+                // Wait before retry with exponential backoff
+                await new Promise(resolve => setTimeout(resolve, 3000 * retryAttempt));
               }
-            });
-            
-            console.log(`✅ Successfully triggered crawl for ${productId}: ${response.status}`);
-            return {
-              status: 'fulfilled',
-              productId,
-              response: response.data
-            };
-          } catch (err) {
-            console.error(`❌ Error calling for ${productId}:`, err.message);
-            console.error(`❌ Error details:`, {
-              code: err.code,
-              status: err.response?.status,
-              statusText: err.response?.statusText,
-              url: url
-            });
-            
-            // If it's a 500 error, it might be due to browser resource issues
-            if (err.response?.status === 500) {
-              console.warn(`⚠️ 500 error for ${productId}, might be browser resource issue`);
-              // Clean up browsers if we have too many
-              if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
-                console.warn(`⚠️ Cleaning up browsers due to 500 error...`);
-                const browsersToClose = Array.from(activeBrowsers);
-                for (const browser of browsersToClose) {
-                  await cleanupBrowser(browser);
+              
+              const response = await axios.get(url, { 
+                timeout: 900000,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (compatible; CrawlBot/1.0)',
+                  'Accept': 'application/json'
+                }
+              });
+              
+              console.log(`✅ Successfully triggered crawl for ${productId}: ${response.status}`);
+              return {
+                status: 'fulfilled',
+                productId,
+                response: response.data
+              };
+            } catch (err) {
+              console.error(`❌ Error calling for ${productId} (attempt ${retryAttempt + 1}):`, err.message);
+              console.error(`❌ Error details:`, {
+                code: err.code,
+                status: err.response?.status,
+                statusText: err.response?.statusText,
+                url: url
+              });
+              
+              retryAttempt++;
+              
+              // If it's a 500 error, it might be due to browser resource issues
+              if (err.response?.status === 500) {
+                console.warn(`⚠️ 500 error for ${productId}, might be browser resource issue`);
+                // Clean up browsers if we have too many
+                if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
+                  console.warn(`⚠️ Cleaning up browsers due to 500 error...`);
+                  const browsersToClose = Array.from(activeBrowsers);
+                  for (const browser of browsersToClose) {
+                    await cleanupBrowser(browser);
+                  }
                 }
               }
+              
+              if (retryAttempt > maxApiRetries) {
+                // Max retries reached
+                console.error(`❌ Failed to call API for ${productId} after ${maxApiRetries} retries`);
+                
+                // Update status to error if the request fails
+                try {
+                  await updateStatus(recordId, STATUS_ERROR);
+                } catch (updateErr) {
+                  console.error(`❌ Failed to update status for ${recordId}:`, updateErr.message);
+                }
+                return {
+                  status: 'rejected',
+                  productId,
+                  reason: err.message,
+                };
+              } else {
+                console.log(`⏳ Will retry API call for ${productId} (${retryAttempt}/${maxApiRetries})`);
+              }
             }
-            
-            // Update status to error if the request fails
-            try {
-              await updateStatus(recordId, STATUS_ERROR);
-            } catch (updateErr) {
-              console.error(`❌ Failed to update status for ${recordId}:`, updateErr.message);
-            }
-            return {
-              status: 'rejected',
-              productId,
-              reason: err.message,
-            };
           }
         })
       );
