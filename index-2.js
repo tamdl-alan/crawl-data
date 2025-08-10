@@ -67,7 +67,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 1; // Giảm xuống 1 để tránh quá tải
+const CONCURRENCY_LIMIT = 2; // Tăng lên 2 để cải thiện hiệu suất
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -119,10 +119,10 @@ let crawlAllTotalCount = 0;
 const MAX_RETRIES = 2;
 const failedRecords = new Map(); // Map to track failed records and their retry count
 
-// Browser instance management - IMPROVED
+// Browser instance management - OPTIMIZED
 let activeBrowsers = new Set();
 let browserLaunchSemaphore = 0;
-const MAX_CONCURRENT_BROWSERS = 2; // Reduced from 3 to 2
+const MAX_CONCURRENT_BROWSERS = 3; // Increased back to 3 for better performance
 const BROWSER_LAUNCH_TIMEOUT = 30000; // 30 seconds
 
 // Browser cleanup function - IMPROVED
@@ -182,7 +182,7 @@ async function safeClosePage(page) {
   }
 }
 
-// Queue health check - IMPROVED
+// Queue health check - OPTIMIZED (less frequent)
 setInterval(() => {
   const now = Date.now();
   const timeSinceLastProcess = now - lastQueueProcessTime;
@@ -200,13 +200,13 @@ setInterval(() => {
     console.warn(`⚠️ Request ${currentProcessingRequest.productId} has been processing for ${Math.round((now - currentProcessingRequest.startTime)/1000)}s`);
   }
   
-  // Log queue status every 5 minutes
-  if (now % (5 * 60 * 1000) < 1000) {
+  // Log queue status every 10 minutes (reduced frequency)
+  if (now % (10 * 60 * 1000) < 1000) {
     console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, activeBrowsers=${activeBrowsers.size}, browserSemaphore=${browserLaunchSemaphore}`);
   }
-}, 60000); // Check every minute
+}, 120000); // Check every 2 minutes (reduced frequency)
 
-// Periodic browser cleanup - IMPROVED
+// Periodic browser cleanup - OPTIMIZED (less frequent)
 setInterval(async () => {
   if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
     console.warn(`⚠️ Too many active browsers (${activeBrowsers.size}), cleaning up...`);
@@ -221,7 +221,7 @@ setInterval(async () => {
     console.warn(`⚠️ Browser semaphore stuck (${browserLaunchSemaphore}), resetting...`);
     browserLaunchSemaphore = activeBrowsers.size;
   }
-}, 30000); // Check every 30 seconds
+}, 60000); // Check every 1 minute (reduced frequency)
 
 app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
@@ -591,18 +591,18 @@ async function processQueueToCrawl() {
       try {
         if (retryAttempt > 0) {
           console.log(`🔄 Retry attempt ${retryAttempt}/${MAX_RETRIES} for ${productId}`);
-          // Wait before retry with exponential backoff
-          await new Promise(resolve => setTimeout(resolve, 3000 * retryAttempt));
+                  // Reduced retry delay for better performance
+        await new Promise(resolve => setTimeout(resolve, 2000 * retryAttempt)); // Reduced from 3000ms to 2000ms
         }
         
-        // Force cleanup before starting new crawl
-        if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
+        // Only cleanup if really necessary
+        if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS + 1) {
           console.warn(`⚠️ Too many browsers before crawl, cleaning up...`);
-          const browsersToClose = Array.from(activeBrowsers);
+          const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
           for (const browser of browsersToClose) {
             await cleanupBrowser(browser);
           }
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced wait time
         }
         
         console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
@@ -653,8 +653,8 @@ async function processQueueToCrawl() {
             if (browserLaunchSemaphore > 0) {
               browserLaunchSemaphore = 0;
             }
-            // Wait longer before continuing
-            await new Promise(resolve => setTimeout(resolve, 8000));
+            // Reduced wait time for better performance
+            await new Promise(resolve => setTimeout(resolve, 3000)); // Reduced from 8000ms to 3000ms
           } catch (cleanupError) {
             console.error('❌ Error during browser cleanup:', cleanupError.message);
           }
@@ -694,9 +694,9 @@ async function processQueueToCrawl() {
     // Clear current processing request
     currentProcessingRequest = null;
     
-    // Add delay between requests to prevent overwhelming
+    // Reduced delay between requests for better performance
     if (requestQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms to 500ms
     }
     
     // Always continue to next request regardless of success/failure
@@ -816,8 +816,8 @@ async function crawlDataGoat(productId, productType) {
     browser = await safeLaunchBrowser();
     page = await browser.newPage();
     
-    // Set page timeout
-    page.setDefaultTimeout(120000);
+    // Optimized page timeout
+    page.setDefaultTimeout(90000); // Reduced from 120 seconds to 90 seconds
     
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
@@ -872,8 +872,8 @@ async function extractDetailsFromProductGoat(url, productId) {
     browserChild = await safeLaunchBrowser();
     page = await browserChild.newPage();
 
-    // Set page timeout
-    page.setDefaultTimeout(120000); // 120 seconds timeout
+    // Optimized page timeout
+    page.setDefaultTimeout(90000); // Reduced from 120 seconds to 90 seconds
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
@@ -896,10 +896,10 @@ async function extractDetailsFromProductGoat(url, productId) {
         }
       });
       
-      // Timeout after 30 seconds
+      // Reduced timeout for better performance
       requestTimeout = setTimeout(() => {
         resolve();
-      }, 30000);
+      }, 20000); // Reduced from 30 seconds to 20 seconds
     });
     
     await page.goto(url, { waitUntil: 'networkidle2' });
@@ -938,7 +938,7 @@ async function extractDetailsFromProductGoat(url, productId) {
     let imgAlt = '';
 
     try {
-      await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
+      await page.waitForSelector('div.swiper-slide-active', { timeout: 45000 }); // Reduced from 60 seconds to 45 seconds
       $('div.swiper-slide-active').each((i, el) => {
         const img = $(el).find('img');
         if (img && !imgSrc && !imgAlt) {
@@ -1177,12 +1177,12 @@ async function triggerAllSearchesFromAirtable() {
 
     console.log(`📋 Found ${records.length} records to process`);
 
-    // Reduce concurrency limit to prevent resource exhaustion
-    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 2);
+    // Optimized concurrency limit for better performance
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 3); // Increased from 2 to 3
     const limit = pLimit(adjustedConcurrencyLimit);
 
-    // Process records in smaller batches to prevent overwhelming the system
-    const batchSize = 5;
+    // Optimized batch size for better performance
+    const batchSize = 8; // Increased from 5 to 8
     const batches = [];
     
     for (let i = 0; i < records.length; i += batchSize) {
@@ -1377,10 +1377,10 @@ async function triggerAllSearchesFromAirtable() {
 
       console.log(`📊 Batch ${batchIndex + 1} Summary: ${batchSuccessCount} success, ${batchErrorCount} errors, ${batchSkippedCount} skipped`);
 
-      // Add delay between batches to prevent resource exhaustion
+      // Reduced delay between batches for better performance
       if (batchIndex < batches.length - 1) {
-        console.log(`⏳ Waiting 2 seconds before next batch...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log(`⏳ Waiting 1 second before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced from 2000ms to 1000ms
       }
     }
 
