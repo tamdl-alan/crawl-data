@@ -56,7 +56,20 @@ const defaultBrowserArgs = {
     "--disable-web-security",
     "--disable-features=VizDisplayCompositor",
     "--memory-pressure-off",
-    "--max_old_space_size=4096"
+    "--max_old_space_size=2048",
+    "--single-process",
+    "--no-zygote",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+    "--disable-logging",
+    "--disable-dev-shm-usage",
+    "--disable-accelerated-2d-canvas",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-background-mode"
   ]
 }
 
@@ -67,7 +80,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 2; // Tăng lên 2 để cải thiện hiệu suất
+const CONCURRENCY_LIMIT = 1; // Giảm xuống 1 để tránh resource exhaustion
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -115,16 +128,19 @@ let isProcessingFailedQueue = false;
 let failedQueueProcessedCount = 0;
 let failedQueueTotalCount = 0;
 
+// Legacy failed records tracking (for backward compatibility)
+const failedRecords = new Map();
+
 // ====== Crawl-all management ====== //
 let isCrawlAllRunning = false;
 let crawlAllStartTime = null;
 let crawlAllProcessedCount = 0;
 let crawlAllTotalCount = 0;
 
-// Browser instance management - OPTIMIZED
+// Browser instance management - RESOURCE OPTIMIZED
 let activeBrowsers = new Set();
 let browserLaunchSemaphore = 0;
-const MAX_CONCURRENT_BROWSERS = 3; // Increased back to 3 for better performance
+const MAX_CONCURRENT_BROWSERS = 1; // Keep at 1 to prevent resource exhaustion
 const BROWSER_LAUNCH_TIMEOUT = 30000; // 30 seconds
 
 // Browser cleanup function - IMPROVED
@@ -155,6 +171,21 @@ async function cleanupBrowser(browser) {
 async function safeLaunchBrowser() {
   if (browserLaunchSemaphore >= MAX_CONCURRENT_BROWSERS) {
     throw new Error('Too many concurrent browsers');
+  }
+  
+  // Check system resources before launching
+  if (!checkSystemResources()) {
+    throw new Error('System resources insufficient for browser launch');
+  }
+  
+  // Force cleanup if resources are low
+  if (activeBrowsers.size > 0) {
+    console.warn(`⚠️ Force cleanup before launching new browser...`);
+    const browsersToClose = Array.from(activeBrowsers);
+    for (const browser of browsersToClose) {
+      await cleanupBrowser(browser);
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for cleanup
   }
   
   browserLaunchSemaphore++;
@@ -191,46 +222,125 @@ function getTimeoutForRetry(retryAttempt) {
   return baseTimeout + (retryAttempt * timeoutIncrease);
 }
 
-// Queue health check - OPTIMIZED (less frequent)
+// Helper function to check system resources
+function checkSystemResources() {
+  const memUsage = process.memoryUsage();
+  const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+  const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
+  const externalMB = Math.round(memUsage.external / 1024 / 1024);
+  const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+  
+  console.log(`📊 Memory usage: Heap=${heapUsedMB}MB/${heapTotalMB}MB, External=${externalMB}MB, RSS=${rssMB}MB`);
+  
+  // Multiple thresholds for different memory types
+  if (heapUsedMB > 400) { // Reduced from 500MB to 400MB
+    console.warn(`⚠️ High heap memory usage detected: ${heapUsedMB}MB`);
+    return false;
+  }
+  
+  if (externalMB > 200) { // External memory threshold
+    console.warn(`⚠️ High external memory usage detected: ${externalMB}MB`);
+    return false;
+  }
+  
+  if (rssMB > 800) { // RSS memory threshold
+    console.warn(`⚠️ High RSS memory usage detected: ${rssMB}MB`);
+    return false;
+  }
+  
+  // Check if we have too many active browsers
+  if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
+    console.warn(`⚠️ Too many active browsers: ${activeBrowsers.size}`);
+    return false;
+  }
+  
+  // Check if semaphore is stuck
+  if (browserLaunchSemaphore > activeBrowsers.size + 1) {
+    console.warn(`⚠️ Browser semaphore stuck: ${browserLaunchSemaphore} > ${activeBrowsers.size + 1}`);
+    return false;
+  }
+  
+  return true;
+}
+
+// Queue health check - ENHANCED with resource monitoring
 setInterval(() => {
   const now = Date.now();
   const timeSinceLastProcess = now - lastQueueProcessTime;
   
-  // If queue has been processing for more than 15 minutes, reset it
-  if (isProcessingQueue && timeSinceLastProcess > 15 * 60 * 1000) {
+  // Check memory usage
+  const memUsage = process.memoryUsage();
+  const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+  const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+  
+  // Emergency cleanup if memory usage is critical
+  if (heapUsedMB > 600 || rssMB > 1000) {
+    console.warn(`🚨 CRITICAL: High memory usage detected! Heap: ${heapUsedMB}MB, RSS: ${rssMB}MB`);
+    console.warn('🚨 Initiating emergency cleanup...');
+    
+    // Force cleanup all browsers
+    const browsersToClose = Array.from(activeBrowsers);
+    browsersToClose.forEach(browser => {
+      cleanupBrowser(browser).catch(err => console.error('❌ Error during emergency cleanup:', err.message));
+    });
+    
+    // Force garbage collection
+    if (global.gc) {
+      global.gc();
+      console.log('🧹 Emergency garbage collection');
+    }
+    
+    // Reset semaphore
+    browserLaunchSemaphore = 0;
+  }
+  
+  // If queue has been processing for more than 10 minutes, reset it (reduced from 15)
+  if (isProcessingQueue && timeSinceLastProcess > 10 * 60 * 1000) {
     console.warn('⚠️ Queue has been processing for too long, resetting...');
     isProcessingQueue = false;
     lastQueueProcessTime = now;
     currentProcessingRequest = null;
   }
   
-  // If a single request has been processing for more than 8 minutes, log warning
-  if (currentProcessingRequest && (now - currentProcessingRequest.startTime) > 8 * 60 * 1000) {
+  // If a single request has been processing for more than 5 minutes, log warning (reduced from 8)
+  if (currentProcessingRequest && (now - currentProcessingRequest.startTime) > 5 * 60 * 1000) {
     console.warn(`⚠️ Request ${currentProcessingRequest.productId} has been processing for ${Math.round((now - currentProcessingRequest.startTime)/1000)}s`);
   }
   
-  // Log queue status every 10 minutes (reduced frequency)
-  if (now % (10 * 60 * 1000) < 1000) {
-    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, activeBrowsers=${activeBrowsers.size}, browserSemaphore=${browserLaunchSemaphore}`);
+  // Log queue status every 5 minutes with memory info
+  if (now % (5 * 60 * 1000) < 1000) {
+    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, activeBrowsers=${activeBrowsers.size}, browserSemaphore=${browserLaunchSemaphore}, memory=${heapUsedMB}MB/${rssMB}MB`);
   }
-}, 120000); // Check every 2 minutes (reduced frequency)
+}, 60000); // Check every 1 minute (increased frequency for better monitoring)
 
-// Periodic browser cleanup - OPTIMIZED (less frequent)
+// Periodic browser cleanup - ENHANCED with memory monitoring
 setInterval(async () => {
-  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
-    console.warn(`⚠️ Too many active browsers (${activeBrowsers.size}), cleaning up...`);
-    const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
+  // Check memory usage
+  const memUsage = process.memoryUsage();
+  const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+  const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+  
+  // Cleanup if memory usage is high or too many browsers
+  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS || heapUsedMB > 350 || rssMB > 700) {
+    console.warn(`⚠️ Cleanup triggered: browsers=${activeBrowsers.size}, memory=${heapUsedMB}MB/${rssMB}MB`);
+    const browsersToClose = Array.from(activeBrowsers);
     for (const browser of browsersToClose) {
       await cleanupBrowser(browser);
+    }
+    
+    // Force garbage collection after cleanup
+    if (global.gc) {
+      global.gc();
+      console.log('🧹 Periodic garbage collection');
     }
   }
   
   // Force cleanup if semaphore is stuck
-  if (browserLaunchSemaphore > activeBrowsers.size + 2) {
+  if (browserLaunchSemaphore > activeBrowsers.size + 1) {
     console.warn(`⚠️ Browser semaphore stuck (${browserLaunchSemaphore}), resetting...`);
     browserLaunchSemaphore = activeBrowsers.size;
   }
-}, 60000); // Check every 1 minute (reduced frequency)
+}, 30000); // Check every 30 seconds (increased frequency for better resource management)
 
 app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
@@ -375,6 +485,123 @@ app.post('/process-failed-queue', async (_req, res) => {
   });
 });
 
+app.post('/emergency-cleanup', async (_req, res) => {
+  try {
+    console.log('🚨 Emergency cleanup initiated...');
+    
+    // Force garbage collection
+    if (global.gc) {
+      global.gc();
+      console.log('🧹 Forced garbage collection');
+    }
+    
+    // Clear all queues
+    const mainQueueLength = requestQueue.length;
+    const failedQueueLength = failedQueue.length;
+    requestQueue.length = 0;
+    failedQueue.length = 0;
+    
+    // Reset all flags
+    isProcessingQueue = false;
+    isProcessingFailedQueue = false;
+    currentProcessingRequest = null;
+    failedQueueProcessedCount = 0;
+    failedQueueTotalCount = 0;
+    
+    // Clean up all browsers
+    const browserCount = activeBrowsers.size;
+    const browsersToClose = Array.from(activeBrowsers);
+    for (const browser of browsersToClose) {
+      await cleanupBrowser(browser);
+    }
+    
+    // Reset semaphore
+    browserLaunchSemaphore = 0;
+    
+    // Clear failed records
+    const failedCount = failedRecords.size;
+    failedRecords.clear();
+    
+    console.log('🚨 Emergency cleanup completed');
+    
+    res.json({
+      message: '🚨 Emergency cleanup completed',
+      details: {
+        clearedMainQueue: mainQueueLength,
+        clearedFailedQueue: failedQueueLength,
+        closedBrowsers: browserCount,
+        clearedFailedRecords: failedCount,
+        memoryUsage: process.memoryUsage()
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to perform emergency cleanup',
+      details: error.message
+    });
+  }
+});
+
+app.post('/force-restart', async (_req, res) => {
+  try {
+    console.log('🔄 Force restart initiated...');
+    
+    // Send immediate response
+    res.json({
+      message: '🔄 Force restart initiated. Application will restart in 5 seconds.',
+      timestamp: new Date().toISOString()
+    });
+    
+    // Perform emergency cleanup first
+    console.log('🧹 Performing emergency cleanup before restart...');
+    
+    // Force garbage collection
+    if (global.gc) {
+      global.gc();
+    }
+    
+    // Clear all queues
+    requestQueue.length = 0;
+    failedQueue.length = 0;
+    
+    // Reset all flags
+    isProcessingQueue = false;
+    isProcessingFailedQueue = false;
+    currentProcessingRequest = null;
+    failedQueueProcessedCount = 0;
+    failedQueueTotalCount = 0;
+    
+    // Clean up all browsers
+    const browsersToClose = Array.from(activeBrowsers);
+    for (const browser of browsersToClose) {
+      await cleanupBrowser(browser);
+    }
+    
+    // Reset semaphore
+    browserLaunchSemaphore = 0;
+    
+    // Clear failed records
+    failedRecords.clear();
+    
+    console.log('✅ Emergency cleanup completed. Restarting in 5 seconds...');
+    
+    // Restart after 5 seconds
+    setTimeout(() => {
+      console.log('🔄 Restarting application...');
+      process.exit(0); // This will trigger a restart if using PM2 or similar
+    }, 5000);
+    
+  } catch (error) {
+    console.error('❌ Error during force restart:', error.message);
+    // Still try to restart even if cleanup fails
+    setTimeout(() => {
+      console.log('🔄 Force restarting despite cleanup error...');
+      process.exit(0);
+    }, 5000);
+  }
+});
+
 app.get('/cleanup-browsers', async (_req, res) => {
   try {
     const browserCount = activeBrowsers.size;
@@ -422,11 +649,26 @@ app.post('/reset-failed-records', (_req, res) => {
 });
 
 app.get('/health-check', (_req, res) => {
+  const memUsage = process.memoryUsage();
+  const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+  const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
+  const externalMB = Math.round(memUsage.external / 1024 / 1024);
+  const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+  
   const healthInfo = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     system: {
-      memory: process.memoryUsage(),
+      memory: {
+        heapUsed: memUsage.heapUsed,
+        heapTotal: memUsage.heapTotal,
+        external: memUsage.external,
+        rss: memUsage.rss,
+        heapUsedMB,
+        heapTotalMB,
+        externalMB,
+        rssMB
+      },
       uptime: process.uptime(),
       nodeVersion: process.version
     },
@@ -449,19 +691,56 @@ app.get('/health-check', (_req, res) => {
     failedRecords: failedRecords.size
   };
   
-  // Determine overall health status
+  // Determine overall health status with enhanced criteria
   let overallStatus = 'healthy';
+  let warnings = [];
+  
+  // Memory warnings
+  if (heapUsedMB > 400) {
+    warnings.push(`High heap memory: ${heapUsedMB}MB`);
+    overallStatus = 'warning';
+  }
+  if (externalMB > 200) {
+    warnings.push(`High external memory: ${externalMB}MB`);
+    overallStatus = 'warning';
+  }
+  if (rssMB > 800) {
+    warnings.push(`High RSS memory: ${rssMB}MB`);
+    overallStatus = 'warning';
+  }
+  
+  // Browser warnings
   if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
+    warnings.push(`Too many browsers: ${activeBrowsers.size}`);
     overallStatus = 'warning';
   }
-  if (requestQueue.length > 50 || failedRecords.size > 10) {
+  if (browserLaunchSemaphore > activeBrowsers.size + 1) {
+    warnings.push(`Semaphore stuck: ${browserLaunchSemaphore}`);
     overallStatus = 'warning';
   }
-  if (isProcessingQueue && (Date.now() - lastQueueProcessTime) > 10 * 60 * 1000) {
+  
+  // Queue warnings
+  if (requestQueue.length > 20) {
+    warnings.push(`Queue too long: ${requestQueue.length}`);
+    overallStatus = 'warning';
+  }
+  if (failedQueue.length > 10) {
+    warnings.push(`Failed queue too long: ${failedQueue.length}`);
+    overallStatus = 'warning';
+  }
+  if (isProcessingQueue && (Date.now() - lastQueueProcessTime) > 5 * 60 * 1000) {
+    warnings.push(`Queue processing too long: ${Math.round((Date.now() - lastQueueProcessTime)/1000)}s`);
     overallStatus = 'error';
   }
   
+  // Critical memory usage
+  if (heapUsedMB > 600 || rssMB > 1000) {
+    overallStatus = 'critical';
+    warnings.push('CRITICAL: Memory usage too high!');
+  }
+  
   healthInfo.status = overallStatus;
+  healthInfo.warnings = warnings;
   
   res.json(healthInfo);
 });
@@ -689,15 +968,21 @@ async function processQueueToCrawl() {
     
         // Process each request (no retry logic - failed items go to failed queue)
     try {
-      // Only cleanup if really necessary
-      if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS + 1) {
-        console.warn(`⚠️ Too many browsers before crawl, cleaning up...`);
-        const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
-        for (const browser of browsersToClose) {
-          await cleanupBrowser(browser);
+              // Always cleanup before starting new crawl to prevent resource exhaustion
+        if (activeBrowsers.size > 0) {
+          console.warn(`⚠️ Cleaning up browsers before crawl to prevent resource exhaustion...`);
+          const browsersToClose = Array.from(activeBrowsers);
+          for (const browser of browsersToClose) {
+            await cleanupBrowser(browser);
+          }
+          await new Promise(resolve => setTimeout(resolve, 3000)); // Increased wait time for cleanup
+          
+          // Force garbage collection after cleanup
+          if (global.gc) {
+            global.gc();
+            console.log('🧹 Forced garbage collection after browser cleanup');
+          }
         }
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced wait time
-      }
       
       console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
       const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
@@ -753,43 +1038,70 @@ async function processQueueToCrawl() {
         }
       }
       
-      // Add to failed queue instead of retrying
-      const failedItem = {
-        recordId,
-        productId,
-        snkrdunkApi,
-        productType,
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
+      // Check if it's a resource error that should be added to failed queue
+      const isResourceError = error.message.includes('Failed to launch') || 
+                             error.message.includes('Resource temporarily unavailable') ||
+                             error.message.includes('pthread_create') ||
+                             error.message.includes('dbus/bus.cc');
       
-      failedQueue.push(failedItem);
-      console.log(`📥 Added ${productId} to failed queue. Failed queue length: ${failedQueue.length}`);
-      
-      // Update status to ERROR
-      try {
-        await updateStatus(recordId, STATUS_ERROR);
-      } catch (updateError) {
-        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+      if (isResourceError) {
+        // Add to failed queue for retry later
+        const failedItem = {
+          recordId,
+          productId,
+          snkrdunkApi,
+          productType,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        
+        failedQueue.push(failedItem);
+        console.log(`📥 Added ${productId} to failed queue due to resource error. Failed queue length: ${failedQueue.length}`);
+        
+        // Update status to ERROR
+        try {
+          await updateStatus(recordId, STATUS_ERROR);
+        } catch (updateError) {
+          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+        }
+        
+        // Send error response if not already sent
+        if (!res.headersSent) {
+          res.status(500).send({ 
+            error: `❌ Resource error crawling ${productId}: ${error.message}. Added to failed queue for retry.` 
+          });
+        }
+        
+        errorCount++;
+      } else {
+        // For non-resource errors, just mark as failed without adding to retry queue
+        console.log(`❌ Non-resource error for ${productId}, not adding to failed queue`);
+        
+        // Update status to ERROR
+        try {
+          await updateStatus(recordId, STATUS_ERROR);
+        } catch (updateError) {
+          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+        }
+        
+        // Send error response if not already sent
+        if (!res.headersSent) {
+          res.status(500).send({ 
+            error: `❌ Error crawling ${productId}: ${error.message}` 
+          });
+        }
+        
+        errorCount++;
       }
-      
-      // Send error response if not already sent
-      if (!res.headersSent) {
-        res.status(500).send({ 
-          error: `❌ Error crawling ${productId}: ${error.message}. Added to failed queue for retry.` 
-        });
-      }
-      
-      errorCount++;
     }
     
     // Clear current processing request
     currentProcessingRequest = null;
     
-    // Reduced delay between requests for better performance
-    if (requestQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms to 500ms
-    }
+          // Increased delay between requests to prevent resource exhaustion
+      if (requestQueue.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Increased from 2000ms to 3000ms
+      }
     
     // Always continue to next request regardless of success/failure
     console.log(`✅ Completed processing ${productId}. Moving to next request...`);
@@ -1412,12 +1724,12 @@ async function triggerAllSearchesFromAirtable() {
 
     console.log(`📋 Found ${records.length} records to process`);
 
-    // Optimized concurrency limit for better performance
-    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 3); // Increased from 2 to 3
+    // Reduced concurrency limit to prevent resource exhaustion
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 1); // Reduced to 1
     const limit = pLimit(adjustedConcurrencyLimit);
 
-    // Optimized batch size for better performance
-    const batchSize = 8; // Increased from 5 to 8
+    // Reduced batch size to prevent resource exhaustion
+    const batchSize = 3; // Reduced from 8 to 3
     const batches = [];
     
     for (let i = 0; i < records.length; i += batchSize) {
@@ -1612,10 +1924,25 @@ async function triggerAllSearchesFromAirtable() {
 
       console.log(`📊 Batch ${batchIndex + 1} Summary: ${batchSuccessCount} success, ${batchErrorCount} errors, ${batchSkippedCount} skipped`);
 
-      // Reduced delay between batches for better performance
+      // Increased delay between batches to prevent resource exhaustion
       if (batchIndex < batches.length - 1) {
-        console.log(`⏳ Waiting 1 second before next batch...`);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced from 2000ms to 1000ms
+        console.log(`⏳ Waiting 10 seconds before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 5000ms to 10000ms
+        
+        // Force cleanup between batches
+        if (activeBrowsers.size > 0) {
+          console.warn(`⚠️ Cleaning up browsers between batches...`);
+          const browsersToClose = Array.from(activeBrowsers);
+          for (const browser of browsersToClose) {
+            await cleanupBrowser(browser);
+          }
+          
+          // Force garbage collection
+          if (global.gc) {
+            global.gc();
+            console.log('🧹 Forced garbage collection between batches');
+          }
+        }
       }
     }
 
