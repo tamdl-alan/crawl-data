@@ -80,7 +80,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 1; // Giảm xuống 1 để tránh resource exhaustion
+const CONCURRENCY_LIMIT = 2; // Increased to 2 for better performance with 3 browsers
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -143,10 +143,14 @@ let crawlAllTotalCount = 0;
 let lastCrawlAllEndTime = null;
 const CRAWL_ALL_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between crawl-all
 
+// ====== Login protection ====== //
+let isLoginInProgress = false;
+let loginStartTime = null;
+
 // Browser instance management - RESOURCE OPTIMIZED
 let activeBrowsers = new Set();
 let browserLaunchSemaphore = 0;
-const MAX_CONCURRENT_BROWSERS = 1; // Keep at 1 to prevent resource exhaustion
+const MAX_CONCURRENT_BROWSERS = 3; // Increased to 3 browsers for better performance
 const BROWSER_LAUNCH_TIMEOUT = 30000; // 30 seconds
 
 // Browser cleanup function - IMPROVED
@@ -184,14 +188,14 @@ async function safeLaunchBrowser() {
     throw new Error('System resources insufficient for browser launch');
   }
   
-  // Force cleanup if resources are low
-  if (activeBrowsers.size > 0) {
-    console.warn(`⚠️ Force cleanup before launching new browser...`);
-    const browsersToClose = Array.from(activeBrowsers);
+  // Only cleanup if we have too many browsers
+  if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
+    console.warn(`⚠️ Too many browsers (${activeBrowsers.size}), cleaning up before launching new browser...`);
+    const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS + 1);
     for (const browser of browsersToClose) {
       await cleanupBrowser(browser);
     }
-    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for cleanup
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Reduced wait time
   }
   
   browserLaunchSemaphore++;
@@ -254,8 +258,8 @@ function checkSystemResources() {
     return false;
   }
   
-  // Check if we have too many active browsers
-  if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
+  // Check if we have too many active browsers (allow some buffer)
+  if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS + 1) {
     console.warn(`⚠️ Too many active browsers: ${activeBrowsers.size}`);
     return false;
   }
@@ -319,17 +323,26 @@ setInterval(() => {
   }
 }, 60000); // Check every 1 minute (increased frequency for better monitoring)
 
-// Periodic browser cleanup - ENHANCED with memory monitoring
+// Periodic browser cleanup - ENHANCED with memory monitoring and login protection
 setInterval(async () => {
   // Check memory usage
   const memUsage = process.memoryUsage();
   const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
   const rssMB = Math.round(memUsage.rss / 1024 / 1024);
   
+  // Don't cleanup if login is in progress
+  if (isLoginInProgress) {
+    const loginDuration = Date.now() - loginStartTime;
+    if (loginDuration < 60000) { // Don't cleanup during first 60 seconds of login
+      console.log(`🔒 Login in progress (${Math.round(loginDuration/1000)}s), skipping cleanup`);
+      return;
+    }
+  }
+  
   // Cleanup if memory usage is high or too many browsers
-  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS || heapUsedMB > 350 || rssMB > 700) {
+  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS + 1 || heapUsedMB > 400 || rssMB > 800) {
     console.warn(`⚠️ Cleanup triggered: browsers=${activeBrowsers.size}, memory=${heapUsedMB}MB/${rssMB}MB`);
-    const browsersToClose = Array.from(activeBrowsers);
+    const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
     for (const browser of browsersToClose) {
       await cleanupBrowser(browser);
     }
@@ -608,6 +621,49 @@ app.get('/crawl-all-status', (_req, res) => {
   }
   
   res.json(status);
+});
+
+app.get('/login-status', (_req, res) => {
+  const now = Date.now();
+  const status = {
+    isLoginInProgress: isLoginInProgress,
+    hasCookies: !!cookieHeader,
+    retryCount: retryCount,
+    maxRetries: RETRY_LIMIT,
+    timestamp: new Date().toISOString()
+  };
+  
+  if (isLoginInProgress && loginStartTime) {
+    const loginDuration = now - loginStartTime;
+    status.loginDuration = loginDuration;
+    status.loginDurationSeconds = Math.round(loginDuration / 1000);
+  }
+  
+  res.json(status);
+});
+
+app.post('/force-login', async (_req, res) => {
+  try {
+    console.log('🔄 Force login initiated...');
+    
+    // Clear existing cookies
+    cookieHeader = '';
+    retryCount = 0;
+    
+    // Send immediate response
+    res.json({
+      message: '🔄 Force login initiated. Clearing cookies and retrying login.',
+      timestamp: new Date().toISOString()
+    });
+    
+    // Force login asynchronously
+    snkrdunkLogin().catch(error => {
+      console.error('❌ Error during force login:', error.message);
+    });
+    
+  } catch (error) {
+    console.error('❌ Error initiating force login:', error.message);
+  }
 });
 
 app.post('/force-restart', async (_req, res) => {
@@ -1060,14 +1116,14 @@ async function processQueueToCrawl() {
     
         // Process each request (no retry logic - failed items go to failed queue)
     try {
-              // Always cleanup before starting new crawl to prevent resource exhaustion
-        if (activeBrowsers.size > 0) {
-          console.warn(`⚠️ Cleaning up browsers before crawl to prevent resource exhaustion...`);
-          const browsersToClose = Array.from(activeBrowsers);
+              // Only cleanup if we have too many browsers
+        if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
+          console.warn(`⚠️ Too many browsers (${activeBrowsers.size}), cleaning up before crawl...`);
+          const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS + 1);
           for (const browser of browsersToClose) {
             await cleanupBrowser(browser);
           }
-          await new Promise(resolve => setTimeout(resolve, 3000)); // Increased wait time for cleanup
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Reduced wait time
           
           // Force garbage collection after cleanup
           if (global.gc) {
@@ -1216,9 +1272,9 @@ async function processQueueToCrawl() {
     // Clear current processing request
     currentProcessingRequest = null;
     
-          // Increased delay between requests to prevent resource exhaustion
+          // Optimized delay between requests for 3 browsers
       if (requestQueue.length > 0) {
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Increased from 2000ms to 3000ms
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Reduced from 3000ms to 1500ms
       }
     
     // Always continue to next request regardless of success/failure
@@ -1401,32 +1457,86 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
-  const browser = await puppeteer.launch(defaultBrowserArgs);
+  let browser = null;
+  let page = null;
+  
   try {
     if (cookieHeader) {
-      return
+      console.log('✅ Using existing Snkrdunk cookies');
+      return;
     }
-    const page = await browser.newPage();
+    
+    // Set login protection
+    isLoginInProgress = true;
+    loginStartTime = Date.now();
+    
+    console.log('🔐 Starting Snkrdunk login...');
+    
+    // Use safeLaunchBrowser instead of direct puppeteer.launch
+    browser = await safeLaunchBrowser();
+    page = await browser.newPage();
+    
+    // Set timeout for login process
+    page.setDefaultTimeout(60000); // 60 seconds for login
+    
     await page.setViewport({ width: 1280, height: 800 });
-    await page.goto(LOGIN_PAGE_SNKRDUNK, { waitUntil: 'networkidle2' });
+    await page.setUserAgent(userAgent);
+    await page.setExtraHTTPHeaders(extraHTTPHeaders);
+    
+    console.log('🌐 Navigating to Snkrdunk login page...');
+    await page.goto(LOGIN_PAGE_SNKRDUNK, { 
+      waitUntil: 'networkidle2',
+      timeout: 30000 
+    });
+    
+    console.log('📝 Filling login form...');
+    await page.waitForSelector('input[name="email"]', { timeout: 10000 });
     await page.type('input[name="email"]', EMAIL_SNKRDUNK, { delay: 100 });
     await page.type('input[name="password"]', PASSWORD_SNKRDUNK, { delay: 100 });
+    
+    console.log('🚀 Submitting login form...');
     await page.evaluate(() => document.querySelector('form').submit());
+    
+    // Wait for navigation after login
+    await page.waitForNavigation({ 
+      waitUntil: 'networkidle2',
+      timeout: 30000 
+    });
+    
+    console.log('🍪 Extracting cookies...');
     const cookies = await page.cookies();
     cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    
+    console.log('✅ Snkrdunk login successful!');
     retryCount = 0; // Reset retry count on successful login
+    
   } catch (err) {
-      console.error('Snkrdunk login failed:', err.message);
-      // Retry login if it fails
-      cookieHeader = '';
-      retryCount++;
-      if (retryCount < RETRY_LIMIT) {
-        console.log(`Retrying login (${retryCount}/${RETRY_LIMIT})...`);
-        await snkrdunkLogin();
-      }
+    console.error('❌ Snkrdunk login failed:', err.message);
+    
+    // Clear cookies on failure
+    cookieHeader = '';
+    retryCount++;
+    
+    if (retryCount < RETRY_LIMIT) {
+      console.log(`🔄 Retrying login (${retryCount}/${RETRY_LIMIT})...`);
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await snkrdunkLogin();
+    } else {
+      console.error(`❌ Max login retries (${RETRY_LIMIT}) reached`);
       throw err;
+    }
   } finally {
-      await browser.close();
+    // Clear login protection
+    isLoginInProgress = false;
+    loginStartTime = null;
+    
+    try {
+      if (page) await safeClosePage(page);
+      if (browser) await cleanupBrowser(browser);
+    } catch (closeError) {
+      console.error('❌ Error closing browser during login:', closeError.message);
+    }
   }
 }
 
@@ -1899,12 +2009,12 @@ async function triggerAllSearchesFromAirtable() {
 
     console.log(`📋 Found ${records.length} records to process`);
 
-    // Reduced concurrency limit to prevent resource exhaustion
-    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 1); // Reduced to 1
+    // Optimized concurrency limit for 3 browsers
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 2); // Increased to 2
     const limit = pLimit(adjustedConcurrencyLimit);
 
-    // Reduced batch size to prevent resource exhaustion
-    const batchSize = 3; // Reduced from 8 to 3
+    // Optimized batch size for 3 browsers
+    const batchSize = 5; // Increased from 3 to 5
     const batches = [];
     
     for (let i = 0; i < records.length; i += batchSize) {
@@ -2099,15 +2209,15 @@ async function triggerAllSearchesFromAirtable() {
 
       console.log(`📊 Batch ${batchIndex + 1} Summary: ${batchSuccessCount} success, ${batchErrorCount} errors, ${batchSkippedCount} skipped`);
 
-      // Increased delay between batches to prevent resource exhaustion
+      // Optimized delay between batches for 3 browsers
       if (batchIndex < batches.length - 1) {
-        console.log(`⏳ Waiting 10 seconds before next batch...`);
-        await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 5000ms to 10000ms
+        console.log(`⏳ Waiting 5 seconds before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Reduced from 10000ms to 5000ms
         
-        // Force cleanup between batches
-        if (activeBrowsers.size > 0) {
-          console.warn(`⚠️ Cleaning up browsers between batches...`);
-          const browsersToClose = Array.from(activeBrowsers);
+        // Only cleanup if too many browsers
+        if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS + 1) {
+          console.warn(`⚠️ Too many browsers (${activeBrowsers.size}), cleaning up between batches...`);
+          const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
           for (const browser of browsersToClose) {
             await cleanupBrowser(browser);
           }
