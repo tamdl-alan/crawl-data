@@ -1529,21 +1529,17 @@ async function crawlDataGoat(productId, productType, retryAttempt = 0) {
     let fullLink = '';
     let cellItemId = '';
       // get first product link
-      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-        const aTag = $(el).find('a');
+      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+      if (firstProductElement.length > 0) {
+        const aTag = firstProductElement.find('a');
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
-          cellItemId = $(el).attr('data-grid-cell-name');
-          return false;
+          cellItemId = firstProductElement.attr('data-grid-cell-name');
         }
-      });
-      if (!fullLink && productType === PRODUCT_TYPE.CLOTHES) {
-        fullLink = goalDomain + '/' + productId?.replace(/^\/+/, '');
       }
-      console.log('🚀 ~ fullLink:', fullLink);
     
-    const details = await extractDetailsFromProductGoat(fullLink, productId, retryAttempt);
+    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId, retryAttempt);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${productId}:`, err.message);
@@ -1566,8 +1562,9 @@ async function crawlDataGoat(productId, productType, retryAttempt = 0) {
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId, retryAttempt = 0) {
-  if (!url) {
+async function extractDetailsFromProductGoat(url, productId, cellItemId, retryAttempt = 0) {
+  if (!url || !cellItemId) {
+    console.error('❌ No URL or cellItemId found for product:', url, cellItemId);
     return [];
   }
   
@@ -1589,27 +1586,7 @@ async function extractDetailsFromProductGoat(url, productId, retryAttempt = 0) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    
-    let reqUrl = '';
-    let requestTimeout = null;
-    
-    // Set up request listener with timeout
-    const requestPromise = new Promise((resolve) => {
-      page.on('request', request => {
-        const url = request.url();
-        if (url.includes(sizeAndPriceGoatUrl)) {
-          reqUrl = url;
-          if (requestTimeout) clearTimeout(requestTimeout);
-          resolve();
-        }
-      });
-      
-      // Reduced timeout for better performance
-      requestTimeout = setTimeout(() => {
-        resolve();
-      }, 20000); // Reduced from 30 seconds to 20 seconds
-    });
-    
+
     await page.goto(url, { waitUntil: 'networkidle2' });
     await requestPromise;
 
@@ -1618,9 +1595,9 @@ async function extractDetailsFromProductGoat(url, productId, retryAttempt = 0) {
       throw new Error('No request URL found');
     }
 
-    const response = await page.evaluate(async (reqUrl) => {
+    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
       try {
-        const res = await fetch(`${reqUrl}`, {
+        const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
           credentials: 'include',
           headers: {
             'Accept-Language':	'en-US,en;q=0.9',
@@ -1637,7 +1614,7 @@ async function extractDetailsFromProductGoat(url, productId, retryAttempt = 0) {
         console.error('Fetch error in page.evaluate:', fetchError.message);
         throw fetchError;
       }
-    }, reqUrl);
+    }, cellItemIdParam, sizeAndPriceGoatUrl);
     
     const html = await page.content();
     const $ = cheerio.load(html);
