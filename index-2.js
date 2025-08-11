@@ -717,7 +717,7 @@ async function crawlDataGoat(productId, productType) {
         });
         
         // Additional wait to ensure content is fully loaded
-        await page.waitForTimeout(2000);
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
         const content = await page.content();
         const $ = cheerio.load(content);
@@ -743,14 +743,14 @@ async function crawlDataGoat(productId, productType) {
           
           if (retryCount < maxRetries) {
             // Wait before retry
-            await page.waitForTimeout(3000);
+            await new Promise(resolve => setTimeout(resolve, 3000));
             
             // Try to scroll down to trigger lazy loading
             await page.evaluate(() => {
               window.scrollTo(0, document.body.scrollHeight);
             });
             
-            await page.waitForTimeout(2000);
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
       } catch (error) {
@@ -758,7 +758,7 @@ async function crawlDataGoat(productId, productType) {
         retryCount++;
         
         if (retryCount < maxRetries) {
-          await page.waitForTimeout(3000);
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
     }
@@ -810,7 +810,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
     await page.goto(url, { waitUntil: 'networkidle2' });
     
     // Wait for the page to be fully loaded
-    await page.waitForTimeout(3000);
+    await new Promise(resolve => setTimeout(resolve, 3000));
     
     // Wait for any dynamic content to load
     try {
@@ -868,7 +868,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
           imageRetryCount++;
           
           if (imageRetryCount < maxImageRetries) {
-            await page.waitForTimeout(2000);
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
       } catch (error) {
@@ -876,7 +876,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         imageRetryCount++;
         
         if (imageRetryCount < maxImageRetries) {
-          await page.waitForTimeout(2000);
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
     }
