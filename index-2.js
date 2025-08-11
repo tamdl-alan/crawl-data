@@ -702,31 +702,70 @@ async function crawlDataGoat(productId, productType) {
 
     await page.goto(`${searchUrl}?query=${productId}`, { waitUntil: 'networkidle2' });
 
-    const content = await page.content();
-    const $ = cheerio.load(content);
-
+    // Wait for the product grid to be ready with retry logic
     let fullLink = '';
     let cellItemId = '';
-      // get first product link
-      // $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-      //   const aTag = $(el).find('a');
-      //   const link = aTag.attr('href');
-      //   if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
-      //     fullLink = goalDomain + link;
-      //     cellItemId = $(el).attr('data-grid-cell-name');
-      //     return false;
-      //   }
-      // });
+    let retryCount = 0;
+    const maxRetries = 5;
+    
+    while (retryCount < maxRetries) {
+      try {
+        // Wait for the specific element to be present
+        await page.waitForSelector('div[data-qa="grid_cell_product"]', { 
+          timeout: 10000,
+          visible: true 
+        });
+        
+        // Additional wait to ensure content is fully loaded
+        await page.waitForTimeout(2000);
+        
+        const content = await page.content();
+        const $ = cheerio.load(content);
 
-      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
-      if (firstProductElement.length > 0) {
-        const aTag = firstProductElement.find('a');
-        const link = aTag.attr('href');
-        if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
-          fullLink = goalDomain + link;
-          cellItemId = firstProductElement.attr('data-grid-cell-name');
+        const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+        
+        if (firstProductElement.length > 0) {
+          const aTag = firstProductElement.find('a');
+          const link = aTag.attr('href');
+          
+          if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
+            fullLink = goalDomain + link;
+            cellItemId = firstProductElement.attr('data-grid-cell-name');
+            console.log(`✅ Found product element for ${productId}: ${fullLink}`);
+            break; // Success, exit the retry loop
+          } else {
+            console.log(`⚠️ Product element found but doesn't match criteria for ${productId}`);
+            break; // Found element but doesn't match, don't retry
+          }
+        } else {
+          console.log(`⚠️ No product element found for ${productId}, retry ${retryCount + 1}/${maxRetries}`);
+          retryCount++;
+          
+          if (retryCount < maxRetries) {
+            // Wait before retry
+            await page.waitForTimeout(3000);
+            
+            // Try to scroll down to trigger lazy loading
+            await page.evaluate(() => {
+              window.scrollTo(0, document.body.scrollHeight);
+            });
+            
+            await page.waitForTimeout(2000);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Error waiting for product element for ${productId}, retry ${retryCount + 1}/${maxRetries}: ${error.message}`);
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          await page.waitForTimeout(3000);
         }
       }
+    }
+    
+    if (!fullLink || !cellItemId) {
+      console.warn(`⚠️ Could not find product element for ${productId} after ${maxRetries} retries`);
+    }
     
     const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
@@ -770,6 +809,19 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
     
     await page.goto(url, { waitUntil: 'networkidle2' });
     
+    // Wait for the page to be fully loaded
+    await page.waitForTimeout(3000);
+    
+    // Wait for any dynamic content to load
+    try {
+      await page.waitForSelector('div.swiper-slide-active', { 
+        timeout: 15000,
+        visible: true 
+      });
+    } catch (error) {
+      console.warn(`⚠️ Could not find swiper-slide-active for ${productId}: ${error.message}`);
+    }
+    
     const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
       const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
         credentials: 'include',
@@ -789,14 +841,49 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
     let imgSrc = '';
     let imgAlt = '';
 
-    await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
-    $('div.swiper-slide-active').each((i, el) => {
-      const img = $(el).find('img');
-      if (img && !imgSrc && !imgAlt) {
-        imgSrc = img.attr('src');
-        imgAlt = img.attr('alt');
+    // Retry logic for finding image
+    let imageRetryCount = 0;
+    const maxImageRetries = 3;
+    
+    while (imageRetryCount < maxImageRetries && (!imgSrc || !imgAlt)) {
+      try {
+        await page.waitForSelector('div.swiper-slide-active', { timeout: 10000 });
+        
+        const html = await page.content();
+        const $ = cheerio.load(html);
+        
+        $('div.swiper-slide-active').each((i, el) => {
+          const img = $(el).find('img');
+          if (img && !imgSrc && !imgAlt) {
+            imgSrc = img.attr('src');
+            imgAlt = img.attr('alt');
+          }
+        });
+        
+        if (imgSrc && imgAlt) {
+          console.log(`✅ Found image for ${productId}: ${imgSrc}`);
+          break;
+        } else {
+          console.log(`⚠️ No image found for ${productId}, retry ${imageRetryCount + 1}/${maxImageRetries}`);
+          imageRetryCount++;
+          
+          if (imageRetryCount < maxImageRetries) {
+            await page.waitForTimeout(2000);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Error finding image for ${productId}, retry ${imageRetryCount + 1}/${maxImageRetries}: ${error.message}`);
+        imageRetryCount++;
+        
+        if (imageRetryCount < maxImageRetries) {
+          await page.waitForTimeout(2000);
+        }
       }
-    });
+    }
+    
+    if (!imgSrc || !imgAlt) {
+      console.warn(`⚠️ Could not find image for ${productId} after ${maxImageRetries} retries`);
+    }
     
     const dataFiltered = getSizeAndPriceGoat(response, productType);
     const products = dataFiltered?.map(item => {
@@ -990,6 +1077,32 @@ async function triggerAllSearchesFromAirtable() {
 
     console.log(`📋 Found ${records.length} records to process`);
 
+    // Step 1: Update all records to "Crawling" status
+    console.log(`🔄 Step 1: Updating all records to "Crawling" status...`);
+    try {
+      const updatePromises = records.map(record => 
+        updateStatus(record.id, STATUS_CRAWLING)
+      );
+      
+      // Update in batches to avoid overwhelming Airtable API
+      const batchSize = 10;
+      for (let i = 0; i < updatePromises.length; i += batchSize) {
+        const batch = updatePromises.slice(i, i + batchSize);
+        await Promise.all(batch);
+        console.log(`✅ Updated batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(updatePromises.length/batchSize)} (${batch.length} records)`);
+        
+        // Small delay between batches to be respectful to Airtable API
+        if (i + batchSize < updatePromises.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      console.log(`✅ Successfully updated all ${records.length} records to "Crawling" status`);
+    } catch (updateError) {
+      console.error('❌ Error updating records to Crawling status:', updateError.message);
+      // Continue with crawl even if status update fails
+    }
+    // Step 2: Start crawling process
+    console.log(`🔄 Step 2: Starting crawling process...`);
     // Reduce concurrency limit to prevent resource exhaustion
     const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 1);
     const limit = pLimit(adjustedConcurrencyLimit);
