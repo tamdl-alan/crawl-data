@@ -883,21 +883,17 @@ async function crawlDataGoat(productId, productType) {
     let fullLink = '';
     let cellItemId = '';
       // get first product link
-      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-        const aTag = $(el).find('a');
+      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+      if (firstProductElement.length > 0) {
+        const aTag = firstProductElement.find('a');
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
-          cellItemId = $(el).attr('data-grid-cell-name');
-          return false;
+          cellItemId = firstProductElement.attr('data-grid-cell-name');
         }
-      });
-      if (!fullLink && productType === PRODUCT_TYPE.CLOTHES) {
-        fullLink = goalDomain + '/' + productId?.replace(/^\/+/, '');
       }
-      console.log('🚀 ~ fullLink:', fullLink);
     
-    const details = await extractDetailsFromProductGoat(fullLink, productId);
+    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId, retryAttempt);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${productId}:`, err.message);
@@ -912,8 +908,9 @@ async function crawlDataGoat(productId, productType) {
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId) {
-  if (!url) {
+async function extractDetailsFromProductGoat(url, productId, cellItemId, retryAttempt = 0) {
+  if (!url || !cellItemId) {
+    console.error('❌ No URL or cellItemId found for product:', url, cellItemId);
     return [];
   }
   
@@ -933,14 +930,7 @@ async function extractDetailsFromProductGoat(url, productId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    let reqUrl = '';
-    page.on('request', request => {
-      const url = request.url();
-      if (url.includes(sizeAndPriceGoatUrl)) {
-        reqUrl = url;
-        return;
-      }
-    });
+
     await page.goto(url, { waitUntil: 'networkidle2' });
 
     if (!reqUrl) {
@@ -949,18 +939,26 @@ async function extractDetailsFromProductGoat(url, productId) {
       throw new Error('No request URL found');
     }
 
-    const response = await page.evaluate(async (reqUrl) => {
-      const res = await fetch(`${reqUrl}`, {
-        credentials: 'include',
-        headers: {
-          'Accept-Language':	'en-US,en;q=0.9',
-          'Accept': 'application/json',
-          'Referer': 'https://www.goat.com',
-          'Origin': 'https://www.goat.com',
+    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
+      try {
+        const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
+          credentials: 'include',
+          headers: {
+            'Accept-Language':	'en-US,en;q=0.9',
+            'Accept': 'application/json',
+            'Referer': 'https://www.goat.com',
+            'Origin': 'https://www.goat.com',
+          }
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
-      });
-      return res.json();
-    }, reqUrl);
+        return res.json();
+      } catch (fetchError) {
+        console.error('Fetch error in page.evaluate:', fetchError.message);
+        throw fetchError;
+      }
+    }, cellItemIdParam, sizeAndPriceGoatUrl);
     
     const html = await page.content();
     const $ = cheerio.load(html);
