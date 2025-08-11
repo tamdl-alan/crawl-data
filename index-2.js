@@ -43,20 +43,7 @@ const defaultBrowserArgs = {
     "--disable-setuid-sandbox",
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding",
-    "--disable-features=TranslateUI",
-    "--disable-ipc-flooding-protection",
-    "--disable-extensions",
-    "--disable-plugins",
-    "--disable-images",
-    "--disable-javascript",
-    "--disable-web-security",
-    "--disable-features=VizDisplayCompositor",
-    "--memory-pressure-off",
-    "--max_old_space_size=4096"
+    "--disable-gpu,"
   ]
 }
 
@@ -67,7 +54,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 1; // Giảm xuống 1 để tránh quá tải
+const CONCURRENCY_LIMIT = 2; // Số lượng request đồng thời
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -109,69 +96,6 @@ let isProcessingQueue = false;
 let lastQueueProcessTime = Date.now();
 let currentProcessingRequest = null;
 
-// ====== Failed Queue Management ====== //
-const failedQueue = [];
-let isProcessingFailedQueue = false;
-let failedQueueProcessedCount = 0;
-let failedQueueTotalCount = 0;
-
-// Track retry attempts for each product
-const retryAttempts = new Map();
-const MAX_RETRY_ATTEMPTS = 2; // Maximum 2 retry attempts
-
-// Browser instance management
-let activeBrowsers = new Set();
-let browserLaunchSemaphore = 0;
-const MAX_CONCURRENT_BROWSERS = 3;
-const BROWSER_LAUNCH_TIMEOUT = 30000; // 30 seconds
-
-// Browser cleanup function
-async function cleanupBrowser(browser) {
-  try {
-    if (browser && !browser.process()?.killed) {
-      await browser.close();
-    }
-  } catch (error) {
-    console.warn('⚠️ Warning when closing browser:', error.message);
-  } finally {
-    activeBrowsers.delete(browser);
-    browserLaunchSemaphore--;
-  }
-}
-
-// Safe browser launch function
-async function safeLaunchBrowser() {
-  if (browserLaunchSemaphore >= MAX_CONCURRENT_BROWSERS) {
-    throw new Error('Too many concurrent browsers');
-  }
-  
-  browserLaunchSemaphore++;
-  let browser = null;
-  
-  try {
-    browser = await puppeteer.launch({
-      ...defaultBrowserArgs,
-      timeout: BROWSER_LAUNCH_TIMEOUT
-    });
-    activeBrowsers.add(browser);
-    return browser;
-  } catch (error) {
-    browserLaunchSemaphore--;
-    throw error;
-  }
-}
-
-// Safe page close function
-async function safeClosePage(page) {
-  try {
-    if (page && !page.isClosed()) {
-      await page.close();
-    }
-  } catch (error) {
-    console.warn('⚠️ Warning when closing page:', error.message);
-  }
-}
-
 // Queue health check
 setInterval(() => {
   const now = Date.now();
@@ -192,20 +116,9 @@ setInterval(() => {
   
   // Log queue status every 5 minutes
   if (now % (5 * 60 * 1000) < 1000) {
-    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, activeBrowsers=${activeBrowsers.size}, browserSemaphore=${browserLaunchSemaphore}`);
+    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s`);
   }
 }, 60000); // Check every minute
-
-// Periodic browser cleanup
-setInterval(async () => {
-  if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
-    console.warn(`⚠️ Too many active browsers (${activeBrowsers.size}), cleaning up...`);
-    const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
-    for (const browser of browsersToClose) {
-      await cleanupBrowser(browser);
-    }
-  }
-}, 30000); // Check every 30 seconds
 
 app.get('/', (_req, res) => {
   res.send('🟢 API is running!');
@@ -219,14 +132,6 @@ app.get('/status', (_req, res) => {
       length: requestQueue.length,
       isProcessing: isProcessingQueue
     },
-    failedQueue: {
-      length: failedQueue.length,
-      isProcessing: isProcessingFailedQueue,
-      processedCount: failedQueueProcessedCount,
-      totalCount: failedQueueTotalCount,
-      maxRetryAttempts: MAX_RETRY_ATTEMPTS,
-      retryAttemptsCount: retryAttempts.size
-    },
     environment: {
       port: PORT,
       concurrencyLimit: CONCURRENCY_LIMIT
@@ -238,10 +143,6 @@ app.get('/queue-info', (_req, res) => {
   const queueInfo = {
     queueLength: requestQueue.length,
     isProcessing: isProcessingQueue,
-    failedQueueLength: failedQueue.length,
-    isProcessingFailedQueue: isProcessingFailedQueue,
-    failedQueueProcessedCount: failedQueueProcessedCount,
-    failedQueueTotalCount: failedQueueTotalCount,
     timestamp: new Date().toISOString(),
     memoryUsage: process.memoryUsage(),
     uptime: process.uptime(),
@@ -261,30 +162,11 @@ app.get('/queue-debug', (_req, res) => {
       lastProcessTime: new Date(lastQueueProcessTime).toISOString(),
       timeSinceLastProcess: Date.now() - lastQueueProcessTime
     },
-    failedQueue: {
-      length: failedQueue.length,
-      isProcessing: isProcessingFailedQueue,
-      processedCount: failedQueueProcessedCount,
-      totalCount: failedQueueTotalCount,
-      maxRetryAttempts: MAX_RETRY_ATTEMPTS,
-      retryAttemptsCount: retryAttempts.size,
-      items: failedQueue.slice(0, 5).map(item => ({
-        productId: item.productId,
-        error: item.error,
-        timestamp: item.timestamp,
-        retryAttempt: item.retryAttempt
-      }))
-    },
     currentRequest: currentProcessingRequest ? {
       productId: currentProcessingRequest.productId,
       startTime: new Date(currentProcessingRequest.startTime).toISOString(),
       processingTime: Date.now() - currentProcessingRequest.startTime
     } : null,
-    browsers: {
-      activeCount: activeBrowsers.size,
-      semaphore: browserLaunchSemaphore,
-      maxConcurrent: MAX_CONCURRENT_BROWSERS
-    },
     system: {
       memory: process.memoryUsage(),
       uptime: process.uptime(),
@@ -293,105 +175,6 @@ app.get('/queue-debug', (_req, res) => {
   };
   
   res.json(debugInfo);
-});
-
-app.get('/failed-queue', (_req, res) => {
-  const failedQueueInfo = {
-    length: failedQueue.length,
-    isProcessing: isProcessingFailedQueue,
-    processedCount: failedQueueProcessedCount,
-    totalCount: failedQueueTotalCount,
-    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
-    retryAttempts: Object.fromEntries(retryAttempts),
-    items: failedQueue.map(item => ({
-      recordId: item.recordId,
-      productId: item.productId,
-      snkrdunkApi: item.snkrdunkApi,
-      productType: item.productType,
-      error: item.error,
-      timestamp: item.timestamp,
-      retryAttempt: item.retryAttempt
-    })),
-    timestamp: new Date().toISOString()
-  };
-  
-  res.json(failedQueueInfo);
-});
-
-app.post('/clear-failed-queue', (_req, res) => {
-  const clearedCount = failedQueue.length;
-  const clearedRetryAttempts = retryAttempts.size;
-  
-  failedQueue.length = 0;
-  failedQueueProcessedCount = 0;
-  failedQueueTotalCount = 0;
-  isProcessingFailedQueue = false;
-  retryAttempts.clear();
-  
-  console.log(`🧹 Cleared ${clearedCount} items from failed queue and ${clearedRetryAttempts} retry attempts`);
-  
-  res.json({
-    message: `✅ Cleared ${clearedCount} items from failed queue and ${clearedRetryAttempts} retry attempts`,
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.post('/process-failed-queue', async (_req, res) => {
-  if (isProcessingFailedQueue) {
-    return res.status(400).json({
-      error: '⛔ Failed queue is already being processed'
-    });
-  }
-  
-  if (failedQueue.length === 0) {
-    return res.status(400).json({
-      error: '⛔ Failed queue is empty'
-    });
-  }
-  
-  // Send immediate response
-  res.json({
-    message: `✅ Started processing failed queue with ${failedQueue.length} items`,
-    timestamp: new Date().toISOString()
-  });
-  
-  // Process failed queue asynchronously
-  processFailedQueue().catch(error => {
-    console.error('❌ Error processing failed queue:', error.message);
-  });
-});
-
-app.get('/retry-attempts', (_req, res) => {
-  const retryInfo = {
-    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
-    currentRetryAttempts: Object.fromEntries(retryAttempts),
-    totalProductsWithRetries: retryAttempts.size,
-    timestamp: new Date().toISOString()
-  };
-  
-  res.json(retryInfo);
-});
-
-app.get('/cleanup-browsers', async (_req, res) => {
-  try {
-    const browserCount = activeBrowsers.size;
-    const browsersToClose = Array.from(activeBrowsers);
-    
-    for (const browser of browsersToClose) {
-      await cleanupBrowser(browser);
-    }
-    
-    res.json({
-      message: `✅ Cleaned up ${browserCount} browsers`,
-      remainingBrowsers: activeBrowsers.size,
-      semaphore: browserLaunchSemaphore
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to cleanup browsers',
-      details: error.message
-    });
-  }
 });
 
 
@@ -518,16 +301,6 @@ async function processQueueToCrawl() {
     
     // Process each request with proper timeout and error handling
     try {
-      // Cleanup browsers if too many before processing
-      if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
-        console.warn(`⚠️ Too many browsers (${activeBrowsers.size}), cleaning up before crawl...`);
-        const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS + 1);
-        for (const browser of browsersToClose) {
-          await cleanupBrowser(browser);
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      
       console.log(`------------Crawling data [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
       const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
       console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
@@ -557,85 +330,25 @@ async function processQueueToCrawl() {
       
     } catch (error) {
       console.error(`❌ Error crawling ${productId}:`, error.message);
+      errorCount++;
       
-      // Check if it's a browser resource error
-      if (error.message.includes('Failed to launch') || error.message.includes('Resource temporarily unavailable')) {
-        console.warn(`⚠️ Browser resource error for ${productId}, cleaning up browsers...`);
-        try {
-          const browsersToClose = Array.from(activeBrowsers);
-          for (const browser of browsersToClose) {
-            await cleanupBrowser(browser);
-          }
-          // Wait a bit before continuing
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        } catch (cleanupError) {
-          console.error('❌ Error during browser cleanup:', cleanupError.message);
-        }
+      // Always try to update status to ERROR
+      try {
+        await updateStatus(recordId, STATUS_ERROR);
+      } catch (updateError) {
+        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
       }
       
-      // Check retry attempts for this product
-      const currentRetries = retryAttempts.get(productId) || 0;
-      
-      if (currentRetries < MAX_RETRY_ATTEMPTS) {
-        // Add to failed queue for retry later
-        const failedItem = {
-          recordId,
-          productId,
-          snkrdunkApi,
-          productType,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-          retryAttempt: currentRetries + 1
-        };
-        
-        failedQueue.push(failedItem);
-        retryAttempts.set(productId, currentRetries + 1);
-        console.log(`📥 Added ${productId} to failed queue (retry ${currentRetries + 1}/${MAX_RETRY_ATTEMPTS}). Failed queue length: ${failedQueue.length}`);
-        
-        // Update status to ERROR
-        try {
-          await updateStatus(recordId, STATUS_ERROR);
-        } catch (updateError) {
-          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
-        }
-        
-        // Send error response if not already sent
-        if (!res.headersSent) {
-          res.status(500).send({ 
-            error: `❌ Resource error crawling ${productId}: ${error.message}. Added to failed queue for retry (${currentRetries + 1}/${MAX_RETRY_ATTEMPTS}).` 
-          });
-        }
-        
-        errorCount++;
-      } else {
-        // Max retries reached, mark as permanently failed
-        console.log(`❌ Max retries (${MAX_RETRY_ATTEMPTS}) reached for ${productId}, marking as permanently failed`);
-        
-        // Update status to ERROR
-        try {
-          await updateStatus(recordId, STATUS_ERROR);
-        } catch (updateError) {
-          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
-        }
-        
-        // Send error response if not already sent
-        if (!res.headersSent) {
-          res.status(500).send({ 
-            error: `❌ Resource error crawling ${productId}: ${error.message}. Max retries (${MAX_RETRY_ATTEMPTS}) reached.` 
-          });
-        }
-        
-        errorCount++;
+      // Send error response if not already sent
+      if (!res.headersSent) {
+        res.status(500).send({ 
+          error: `❌ Error crawling ${productId}: ${error.message}` 
+        });
       }
     }
     
     // Clear current processing request
     currentProcessingRequest = null;
-    
-    // Add delay between requests to prevent resource exhaustion
-    if (requestQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
     
     // Always continue to next request regardless of success/failure
     console.log(`✅ Completed processing ${productId}. Moving to next request...`);
@@ -645,120 +358,6 @@ async function processQueueToCrawl() {
   lastQueueProcessTime = Date.now();
   currentProcessingRequest = null;
   console.log(`✅ Queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
-  
-  // Process failed queue if there are failed items
-  if (failedQueue.length > 0) {
-    console.log(`🔄 Main queue completed. Starting failed queue processing with ${failedQueue.length} items...`);
-    await processFailedQueue();
-  }
-}
-
-async function processFailedQueue() {
-  if (isProcessingFailedQueue) {
-    console.log('⏳ Failed queue is already being processed, skipping...');
-    return;
-  }
-  
-  isProcessingFailedQueue = true;
-  failedQueueTotalCount = failedQueue.length;
-  failedQueueProcessedCount = 0;
-  
-  console.log(`🔄 Starting failed queue processing. Failed queue length: ${failedQueue.length}`);
-
-  let processedCount = 0;
-  let successCount = 0;
-  let errorCount = 0;
-
-  while (failedQueue.length > 0) {
-    const failedItem = failedQueue.shift();
-    processedCount++;
-    failedQueueProcessedCount++;
-    
-    console.log(`📋 Processing failed item ${processedCount}. Remaining in failed queue: ${failedQueue.length}`);
-    console.log(`🔄 Retrying ${failedItem.productId} (retry ${failedItem.retryAttempt}/${MAX_RETRY_ATTEMPTS}, previous error: ${failedItem.error})`);
-
-    const { recordId, productId, snkrdunkApi, productType, retryAttempt } = failedItem;
-    
-    // Track current processing request
-    currentProcessingRequest = {
-      productId,
-      startTime: Date.now()
-    };
-    
-    try {
-      // Cleanup browsers if too many before retry
-      if (activeBrowsers.size >= MAX_CONCURRENT_BROWSERS) {
-        console.warn(`⚠️ Too many browsers before retry, cleaning up...`);
-        const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS + 1);
-        for (const browser of browsersToClose) {
-          await cleanupBrowser(browser);
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      
-      console.log(`------------Retrying [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
-      const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
-      console.log(`------------Retrying [${productId}] SNKRDUNK End: [${new Date()}]------------`);
-
-      console.log(`------------Retrying [${productId}] GOAT Start: [${new Date()}]------------`);
-      const dataGoat = await crawlDataGoat(productId, productType);
-      console.log(`------------Retrying [${productId}] GOAT End: [${new Date()}]------------`);
-
-      const mergedArr = mergeData(dataSnk, dataGoat);
-      
-      if (!mergedArr?.length) {
-        console.warn(`⚠️ No data found for failed Product ID: ${productId}`);
-        await updateStatus(recordId, STATUS_ERROR);
-        errorCount++;
-      } else {
-        await deleteRecordByProductId(productId);
-        await pushToAirtable(mergedArr);
-        await updateStatus(recordId, STATUS_SUCCESS);
-        console.log(`✅ Successfully retried ${productId} (attempt ${retryAttempt})`);
-        
-        // Clear retry attempts for this product on success
-        retryAttempts.delete(productId);
-        successCount++;
-      }
-      
-    } catch (error) {
-      console.error(`❌ Error retrying ${productId}:`, error.message);
-      
-      // Check if this was the final retry attempt
-      const currentRetries = retryAttempts.get(productId) || 0;
-      
-      if (currentRetries >= MAX_RETRY_ATTEMPTS) {
-        // Final failure, clear retry attempts
-        retryAttempts.delete(productId);
-        console.log(`❌ Final failure for ${productId} after ${MAX_RETRY_ATTEMPTS} retry attempts`);
-      } else {
-        console.log(`❌ Retry ${retryAttempt} failed for ${productId}, will retry again`);
-      }
-      
-      // Update status to ERROR
-      try {
-        await updateStatus(recordId, STATUS_ERROR);
-      } catch (updateError) {
-        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
-      }
-      
-      errorCount++;
-    }
-    
-    // Clear current processing request
-    currentProcessingRequest = null;
-    
-    // Add delay between failed items
-    if (failedQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    
-    console.log(`✅ Completed retrying ${productId}. Moving to next failed item...`);
-  }
-  
-  isProcessingFailedQueue = false;
-  console.log(`✅ Failed queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
-  console.log(`📊 Failed queue summary: ${successCount} recovered, ${errorCount} final failures`);
 }
 
 async function deleteRecordByProductId(productId) {
@@ -865,7 +464,7 @@ async function crawlDataGoat(productId, productType) {
   let browser = null;
   let page = null;
   try {
-    browser = await safeLaunchBrowser();
+    browser = await puppeteer.launch(defaultBrowserArgs);
     page = await browser.newPage();
     
     // Set page timeout
@@ -883,34 +482,37 @@ async function crawlDataGoat(productId, productType) {
     let fullLink = '';
     let cellItemId = '';
       // get first product link
-      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
-      if (firstProductElement.length > 0) {
-        const aTag = firstProductElement.find('a');
+      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
+        const aTag = $(el).find('a');
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
-          cellItemId = firstProductElement.attr('data-grid-cell-name');
+          cellItemId = $(el).attr('data-grid-cell-name');
+          return false;
         }
-      }
+      });
     
-    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId, retryAttempt);
+    // Close the current page and browser before creating a new one for details
+    if (page) await page.close();
+    if (browser) await browser.close();
+    
+    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${productId}:`, err.message);
     throw err;
   } finally {
     try {
-      if (page) await safeClosePage(page);
-      if (browser) await cleanupBrowser(browser);
+      if (page) await page.close();
+      if (browser) await browser.close();
     } catch (closeError) {
       console.error('❌ Error closing browser:', closeError.message);
     }
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId, cellItemId, retryAttempt = 0) {
-  if (!url || !cellItemId) {
-    console.error('❌ No URL or cellItemId found for product:', url, cellItemId);
+async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
+  if (!url || !cellItemIdParam) {
     return [];
   }
   
@@ -918,46 +520,34 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId, retryAt
   let page = null;
   
   try {
-    browserChild = await safeLaunchBrowser();
+    browserChild = await puppeteer.launch(defaultBrowserArgs);
     page = await browserChild.newPage();
-
+    
     // Set page timeout
-    page.setDefaultTimeout(120000); // 120 seconds timeout
+    page.setDefaultTimeout(60000); // 60 seconds timeout
+    
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
+
     await page.setCookie(
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-
+    
     await page.goto(url, { waitUntil: 'networkidle2' });
-
-    if (!reqUrl) {
-      await updateStatus(recordId, STATUS_ERROR);
-      console.error('No request URL found');
-      throw new Error('No request URL found');
-    }
-
+    
     const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
-      try {
-        const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
-          credentials: 'include',
-          headers: {
-            'Accept-Language':	'en-US,en;q=0.9',
-            'Accept': 'application/json',
-            'Referer': 'https://www.goat.com',
-            'Origin': 'https://www.goat.com',
-          }
-        });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
+        credentials: 'include',
+        headers: {
+          'Accept-Language':	'en-US,en;q=0.9',
+          'Accept': 'application/json',
+          'Referer': 'https://www.goat.com',
+          'Origin': 'https://www.goat.com',
         }
-        return res.json();
-      } catch (fetchError) {
-        console.error('Fetch error in page.evaluate:', fetchError.message);
-        throw fetchError;
-      }
+      });
+      return res.json();
     }, cellItemIdParam, sizeAndPriceGoatUrl);
     
     const html = await page.content();
@@ -994,8 +584,8 @@ async function extractDetailsFromProductGoat(url, productId, cellItemId, retryAt
     throw err;
   } finally {
     try {
-      if (page) await safeClosePage(page);
-      if (browserChild) await cleanupBrowser(browserChild);
+      if (page) await page.close();
+      if (browserChild) await browserChild.close();
     } catch (closeError) {
       console.error('❌ Error closing browser child:', closeError.message);
     }
@@ -1142,60 +732,16 @@ function conditionCheckSize(sizeItem, nameItem) {
 }
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Listening on port ${PORT}: ${process.env.DATA_SEARCH_TABLE}`);
+  console.log(`🚀 Listening on port ${PORT} for Sy`);
 });
 
-cron.schedule(process.env.CRON_SCHEDULE || '0 * * * *', async () => {
-  console.log('⏰ Running scheduled crawl at' + new Date());
+cron.schedule(process.env.CRON_SCHEDULE || '0 0 * * *', async () => {
+  console.log('⏰ Running scheduled crawl at 0h');
   await triggerAllSearchesFromAirtable();
 });
 
 async function triggerAllSearchesFromAirtable() {
   try {
-    // PRE-CLEANUP: Force cleanup before starting crawl-all
-    console.log('🧹 PRE-CLEANUP: Force cleanup before crawl-all...');
-    
-    // Force garbage collection
-    if (global.gc) {
-      global.gc();
-      console.log('🧹 Forced garbage collection before crawl-all');
-    }
-    
-    // Clear all queues
-    const mainQueueLength = requestQueue.length;
-    const failedQueueLength = failedQueue.length;
-    requestQueue.length = 0;
-    failedQueue.length = 0;
-    
-    // Reset all flags
-    isProcessingQueue = false;
-    isProcessingFailedQueue = false;
-    currentProcessingRequest = null;
-    failedQueueProcessedCount = 0;
-    failedQueueTotalCount = 0;
-    
-    // Clear retry attempts
-    const retryAttemptsCount = retryAttempts.size;
-    retryAttempts.clear();
-    
-    // Clean up all browsers
-    const browserCount = activeBrowsers.size;
-    if (browserCount > 0) {
-      console.warn(`⚠️ Cleaning up ${browserCount} browsers before crawl-all...`);
-      const browsersToClose = Array.from(activeBrowsers);
-      for (const browser of browsersToClose) {
-        await cleanupBrowser(browser);
-      }
-    }
-    
-    // Reset semaphore
-    browserLaunchSemaphore = 0;
-    
-    console.log(`✅ PRE-CLEANUP completed: cleared ${mainQueueLength} main queue, ${failedQueueLength} failed queue, ${browserCount} browsers, ${retryAttemptsCount} retry attempts`);
-    
-    // Wait for cleanup to settle
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
     // Debug environment variables
     console.log(`🔧 Environment check:`, {
       MAIN_URL: process.env.MAIN_URL,
@@ -1330,20 +876,6 @@ async function triggerAllSearchesFromAirtable() {
               statusText: err.response?.statusText,
               url: url
             });
-            
-            // If it's a 500 error, it might be due to browser resource issues
-            if (err.response?.status === 500) {
-              console.warn(`⚠️ 500 error for ${productId}, might be browser resource issue`);
-              // Clean up browsers if we have too many
-              if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
-                console.warn(`⚠️ Cleaning up browsers due to 500 error...`);
-                const browsersToClose = Array.from(activeBrowsers);
-                for (const browser of browsersToClose) {
-                  await cleanupBrowser(browser);
-                }
-              }
-            }
-            
             // Update status to error if the request fails
             try {
               await updateStatus(recordId, STATUS_ERROR);
@@ -1390,74 +922,17 @@ async function triggerAllSearchesFromAirtable() {
 
       console.log(`📊 Batch ${batchIndex + 1} Summary: ${batchSuccessCount} success, ${batchErrorCount} errors, ${batchSkippedCount} skipped`);
 
-      // Add delay and cleanup between batches to prevent resource exhaustion
+      // Add delay between batches to prevent resource exhaustion
       if (batchIndex < batches.length - 1) {
-        console.log(`⏳ Waiting 3 seconds before next batch...`);
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // Cleanup browsers if too many
-        if (activeBrowsers.size > MAX_CONCURRENT_BROWSERS) {
-          console.warn(`⚠️ Too many browsers (${activeBrowsers.size}), cleaning up between batches...`);
-          const browsersToClose = Array.from(activeBrowsers).slice(0, activeBrowsers.size - MAX_CONCURRENT_BROWSERS);
-          for (const browser of browsersToClose) {
-            await cleanupBrowser(browser);
-          }
-          
-          // Force garbage collection
-          if (global.gc) {
-            global.gc();
-            console.log('🧹 Forced garbage collection between batches');
-          }
-        }
+        console.log(`⏳ Waiting 2 seconds before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
     console.log(`📊 Final Crawl Summary: ${totalSuccessCount} success, ${totalErrorCount} errors, ${totalSkippedCount} skipped`);
     
-    // POST-CLEANUP: Force cleanup after crawl-all
-    console.log('🧹 POST-CLEANUP: Force cleanup after crawl-all...');
-    
-    // Force garbage collection
-    if (global.gc) {
-      global.gc();
-      console.log('🧹 Forced garbage collection after crawl-all');
-    }
-    
-    // Clean up any remaining browsers
-    const remainingBrowsers = activeBrowsers.size;
-    if (remainingBrowsers > 0) {
-      console.warn(`⚠️ Cleaning up ${remainingBrowsers} remaining browsers after crawl-all...`);
-      const browsersToClose = Array.from(activeBrowsers);
-      for (const browser of browsersToClose) {
-        await cleanupBrowser(browser);
-      }
-    }
-    
-    // Reset semaphore
-    browserLaunchSemaphore = 0;
-    
-    console.log(`✅ POST-CLEANUP completed: cleaned ${remainingBrowsers} remaining browsers`);
-    
-    // Wait for cleanup to settle
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
   } catch (err) {
     console.error('❌ Lỗi khi lấy record từ Airtable:', err.message);
-    
-    // Emergency cleanup on error
-    console.log('🚨 Emergency cleanup due to error...');
-    try {
-      if (global.gc) global.gc();
-      const browsersToClose = Array.from(activeBrowsers);
-      for (const browser of browsersToClose) {
-        await cleanupBrowser(browser);
-      }
-      browserLaunchSemaphore = 0;
-      console.log('✅ Emergency cleanup completed');
-    } catch (cleanupErr) {
-      console.error('❌ Error during emergency cleanup:', cleanupErr.message);
-    }
-    
     throw err;
   }
 }
