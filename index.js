@@ -54,7 +54,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 2; // Số lượng request đồng thời
+const CONCURRENCY_LIMIT = 1; // Số lượng request đồng thời
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -92,9 +92,15 @@ let productType = PRODUCT_TYPE.SHOE;
 
 // ====== Queue quản lý request tuần tự ====== //
 const requestQueue = [];
+const failedQueue = [];
 let isProcessingQueue = false;
+let isProcessingFailedQueue = false;
 let lastQueueProcessTime = Date.now();
 let currentProcessingRequest = null;
+
+// Track retry attempts for each product
+const retryAttempts = new Map();
+const MAX_RETRY_ATTEMPTS = 2; // Maximum 2 retry attempts
 
 // Queue health check
 setInterval(() => {
@@ -116,7 +122,7 @@ setInterval(() => {
   
   // Log queue status every 5 minutes
   if (now % (5 * 60 * 1000) < 1000) {
-    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s`);
+    console.log(`📊 Queue Status: length=${requestQueue.length}, processing=${isProcessingQueue}, timeSinceLastProcess=${Math.round(timeSinceLastProcess/1000)}s, failedQueue=${failedQueue.length}, failedProcessing=${isProcessingFailedQueue}, retryAttempts=${retryAttempts.size}`);
   }
 }, 60000); // Check every minute
 
@@ -154,6 +160,108 @@ app.get('/queue-info', (_req, res) => {
   res.json(queueInfo);
 });
 
+app.get('/queue-debug', (_req, res) => {
+  const debugInfo = {
+    queue: {
+      length: requestQueue.length,
+      isProcessing: isProcessingQueue,
+      lastProcessTime: new Date(lastQueueProcessTime).toISOString(),
+      timeSinceLastProcess: Date.now() - lastQueueProcessTime
+    },
+    failedQueue: {
+      length: failedQueue.length,
+      isProcessing: isProcessingFailedQueue,
+      maxRetryAttempts: MAX_RETRY_ATTEMPTS,
+      retryAttemptsCount: retryAttempts.size
+    },
+    currentRequest: currentProcessingRequest ? {
+      productId: currentProcessingRequest.productId,
+      startTime: new Date(currentProcessingRequest.startTime).toISOString(),
+      processingTime: Date.now() - currentProcessingRequest.startTime
+    } : null,
+    system: {
+      memory: process.memoryUsage(),
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }
+  };
+  
+  res.json(debugInfo);
+});
+
+
+app.get('/failed-queue', (_req, res) => {
+  const failedQueueInfo = {
+    length: failedQueue.length,
+    isProcessing: isProcessingFailedQueue,
+    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
+    retryAttempts: Object.fromEntries(retryAttempts),
+    items: failedQueue.map(item => ({
+      recordId: item.recordId,
+      productId: item.productId,
+      snkrdunkApi: item.snkrdunkApi,
+      productType: item.productType,
+      error: item.error,
+      timestamp: item.timestamp,
+      retryAttempt: item.retryAttempt
+    })),
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json(failedQueueInfo);
+});
+
+app.post('/clear-failed-queue', (_req, res) => {
+  const clearedCount = failedQueue.length;
+  const clearedRetryAttempts = retryAttempts.size;
+  
+  failedQueue.length = 0;
+  isProcessingFailedQueue = false;
+  retryAttempts.clear();
+  
+  console.log(`🧹 Cleared ${clearedCount} items from failed queue and ${clearedRetryAttempts} retry attempts`);
+  
+  res.json({
+    message: `✅ Cleared ${clearedCount} items from failed queue and ${clearedRetryAttempts} retry attempts`,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/process-failed-queue', async (_req, res) => {
+  if (isProcessingFailedQueue) {
+    return res.status(400).json({
+      error: '⛔ Failed queue is already being processed'
+    });
+  }
+  
+  if (failedQueue.length === 0) {
+    return res.status(400).json({
+      error: '⛔ Failed queue is empty'
+    });
+  }
+  
+  // Send immediate response
+  res.json({
+    message: `✅ Started processing failed queue with ${failedQueue.length} items`,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Process failed queue asynchronously
+  processFailedQueue().catch(error => {
+    console.error('❌ Error processing failed queue:', error.message);
+  });
+});
+
+app.get('/retry-attempts', (_req, res) => {
+  const retryInfo = {
+    maxRetryAttempts: MAX_RETRY_ATTEMPTS,
+    currentRetryAttempts: Object.fromEntries(retryAttempts),
+    totalProductsWithRetries: retryAttempts.size,
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json(retryInfo);
+});
 
 app.get('/crawl-all', async (_req, res) => {
   try {
@@ -287,6 +395,7 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
+      
       if (!mergedArr?.length) {
         console.warn(`⚠️ No data found for Product ID: ${productId}`);
         await updateStatus(recordId, STATUS_ERROR);
@@ -306,20 +415,62 @@ async function processQueueToCrawl() {
       
     } catch (error) {
       console.error(`❌ Error crawling ${productId}:`, error.message);
-      errorCount++;
       
-      // Always try to update status to ERROR
-      try {
-        await updateStatus(recordId, STATUS_ERROR);
-      } catch (updateError) {
-        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
-      }
+      // Check retry attempts for this product
+      const currentRetries = retryAttempts.get(productId) || 0;
       
-      // Send error response if not already sent
-      if (!res.headersSent) {
-        res.status(500).send({ 
-          error: `❌ Error crawling ${productId}: ${error.message}` 
-        });
+      if (currentRetries < MAX_RETRY_ATTEMPTS) {
+        // Add to failed queue for retry later
+        const failedItem = {
+          req,
+          res,
+          recordId,
+          productId,
+          snkrdunkApi,
+          productType,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+          retryAttempt: currentRetries + 1
+        };
+        
+        failedQueue.push(failedItem);
+        retryAttempts.set(productId, currentRetries + 1);
+        console.log(`📥 Added ${productId} to failed queue (retry ${currentRetries + 1}/${MAX_RETRY_ATTEMPTS}). Failed queue length: ${failedQueue.length}`);
+        
+        // Update status to ERROR
+        try {
+          await updateStatus(recordId, STATUS_ERROR);
+        } catch (updateError) {
+          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+        }
+        
+        // Send error response if not already sent
+        if (!res.headersSent) {
+          res.status(500).send({ 
+            error: `❌ Error crawling ${productId}: ${error.message}. Added to failed queue for retry (${currentRetries + 1}/${MAX_RETRY_ATTEMPTS}).` 
+          });
+        }
+        
+        errorCount++;
+      } else {
+        // Max retries reached, mark as permanently failed
+        console.log(`❌ Max retries (${MAX_RETRY_ATTEMPTS}) reached for ${productId}, marking as permanently failed`);
+        
+        // Update status to ERROR
+        try {
+          await updateStatus(recordId, STATUS_ERROR);
+        } catch (updateError) {
+          console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+        }
+        
+        // Send error response if not already sent
+        if (!res.headersSent) {
+          res.status(500).send({ 
+            error: `❌ Error crawling ${productId}: ${error.message}. Max retries (${MAX_RETRY_ATTEMPTS}) reached.` 
+          });
+        }
+        
+        errorCount++;
       }
     }
     
@@ -334,6 +485,105 @@ async function processQueueToCrawl() {
   lastQueueProcessTime = Date.now();
   currentProcessingRequest = null;
   console.log(`✅ Queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
+  
+  // Process failed queue if there are failed items
+  if (failedQueue.length > 0) {
+    console.log(`🔄 Main queue completed. Starting failed queue processing with ${failedQueue.length} items...`);
+    await processFailedQueue();
+  }
+}
+
+async function processFailedQueue() {
+  if (isProcessingFailedQueue) {
+    console.log('⏳ Failed queue is already being processed, skipping...');
+    return;
+  }
+  
+  isProcessingFailedQueue = true;
+  console.log(`🔄 Starting failed queue processing. Failed queue length: ${failedQueue.length}`);
+
+  let processedCount = 0;
+  let successCount = 0;
+  let errorCount = 0;
+
+  while (failedQueue.length > 0) {
+    const failedItem = failedQueue.shift();
+    processedCount++;
+    console.log(`📋 Processing failed item ${processedCount}. Remaining in failed queue: ${failedQueue.length}`);
+    console.log(`🔄 Retrying ${failedItem.productId} (retry ${failedItem.retryAttempt}/${MAX_RETRY_ATTEMPTS}, previous error: ${failedItem.error})`);
+
+    const { req, res, recordId, productId, snkrdunkApi, productType, retryAttempt } = failedItem;
+    
+    // Track current processing request
+    currentProcessingRequest = {
+      productId,
+      startTime: Date.now()
+    };
+    
+    try {
+      console.log(`------------Retrying [${productId}] SNKRDUNK Start: [${new Date()}]------------`);
+      const dataSnk = await crawlDataSnkrdunk(snkrdunkApi, productType);
+      console.log(`------------Retrying [${productId}] SNKRDUNK End: [${new Date()}]------------`);
+
+      console.log(`------------Retrying [${productId}] GOAT Start: [${new Date()}]------------`);
+      const dataGoat = await crawlDataGoat(productId, productType);
+      console.log(`------------Retrying [${productId}] GOAT End: [${new Date()}]------------`);
+
+      const mergedArr = mergeData(dataSnk, dataGoat);
+      
+      if (!mergedArr?.length) {
+        console.warn(`⚠️ No data found for failed Product ID: ${productId}`);
+        await updateStatus(recordId, STATUS_ERROR);
+        errorCount++;
+      } else {
+        await deleteRecordByProductId(productId);
+        await pushToAirtable(mergedArr);
+        await updateStatus(recordId, STATUS_SUCCESS);
+        console.log(`✅ Successfully retried ${productId} (attempt ${retryAttempt})`);
+        
+        // Clear retry attempts for this product on success
+        retryAttempts.delete(productId);
+        successCount++;
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error retrying ${productId}:`, error.message);
+      
+      // Check if this was the final retry attempt
+      const currentRetries = retryAttempts.get(productId) || 0;
+      
+      if (currentRetries >= MAX_RETRY_ATTEMPTS) {
+        // Final failure, clear retry attempts
+        retryAttempts.delete(productId);
+        console.log(`❌ Final failure for ${productId} after ${MAX_RETRY_ATTEMPTS} retry attempts`);
+      } else {
+        console.log(`❌ Retry ${retryAttempt} failed for ${productId}, will retry again`);
+      }
+      
+      // Update status to ERROR
+      try {
+        await updateStatus(recordId, STATUS_ERROR);
+      } catch (updateError) {
+        console.error(`❌ Failed to update status for ${recordId}:`, updateError.message);
+      }
+      
+      errorCount++;
+    }
+    
+    // Clear current processing request
+    currentProcessingRequest = null;
+    
+    // Add delay between failed items
+    if (failedQueue.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay between failed items
+    }
+    
+    console.log(`✅ Completed retrying ${productId}. Moving to next failed item...`);
+  }
+  
+  isProcessingFailedQueue = false;
+  console.log(`✅ Failed queue processing completed. Processed: ${processedCount}, Success: ${successCount}, Errors: ${errorCount}`);
+  console.log(`📊 Failed queue summary: ${successCount} recovered, ${errorCount} final failures`);
 }
 
 async function deleteRecordByProductId(productId) {
@@ -452,28 +702,72 @@ async function crawlDataGoat(productId, productType) {
 
     await page.goto(`${searchUrl}?query=${productId}`, { waitUntil: 'networkidle2' });
 
-    const content = await page.content();
-    const $ = cheerio.load(content);
-
+    // Wait for the product grid to be ready with retry logic
     let fullLink = '';
     let cellItemId = '';
-      // get first product link
-      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-        const aTag = $(el).find('a');
-        const link = aTag.attr('href');
-        if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
-          fullLink = goalDomain + link;
-          return false;
+    let retryCount = 0;
+    const maxRetries = 5;
+    
+    while (retryCount < maxRetries) {
+      try {
+        // Wait for the specific element to be present
+        await page.waitForSelector('div[data-qa="grid_cell_product"]', { 
+          timeout: 10000,
+          visible: true 
+        });
+        
+        // Additional wait to ensure content is fully loaded
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const content = await page.content();
+        const $ = cheerio.load(content);
+
+        const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+        
+        if (firstProductElement.length > 0) {
+          const aTag = firstProductElement.find('a');
+          const link = aTag.attr('href');
+          
+          if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
+            fullLink = goalDomain + link;
+            cellItemId = firstProductElement.attr('data-grid-cell-name');
+            console.log(`✅ Found product element for ${productId}: ${fullLink}`);
+            break; // Success, exit the retry loop
+          } else {
+            console.log(`⚠️ Product element found but doesn't match criteria for ${productId}`);
+            break; // Found element but doesn't match, don't retry
+          }
+        } else {
+          console.log(`⚠️ No product element found for ${productId}, retry ${retryCount + 1}/${maxRetries}`);
+          retryCount++;
+          
+          if (retryCount < maxRetries) {
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            // Try to scroll down to trigger lazy loading
+            await page.evaluate(() => {
+              window.scrollTo(0, document.body.scrollHeight);
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
         }
-      });
-      if (!fullLink && productType === PRODUCT_TYPE.CLOTHES) {
-        fullLink = goalDomain + '/' + productId?.replace(/^\/+/, '');
+      } catch (error) {
+        console.log(`⚠️ Error waiting for product element for ${productId}, retry ${retryCount + 1}/${maxRetries}: ${error.message}`);
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
       }
-      console.log('🚀 ~ fullLink:', fullLink);
-    // Close the current page and browser before creating a new one for details
-    // if (page) await page.close();
-    // if (browser) await browser.close();
-    const details = await extractDetailsFromProductGoat(fullLink, productId);
+    }
+    
+    if (!fullLink || !cellItemId) {
+      console.warn(`⚠️ Could not find product element for ${productId} after ${maxRetries} retries`);
+    }
+    
+    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
     return details;
   } catch (err) {
     console.error(`❌ Error crawling ${productId}:`, err.message);
@@ -488,8 +782,9 @@ async function crawlDataGoat(productId, productType) {
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId) {
-  if (!url) {
+async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
+  if (!url || !cellItemIdParam) {
+    console.error(`❌ Invalid URL or cellItemIdParam: ${url}, ${cellItemIdParam}`);
     return [];
   }
   
@@ -499,34 +794,36 @@ async function extractDetailsFromProductGoat(url, productId) {
   try {
     browserChild = await puppeteer.launch(defaultBrowserArgs);
     page = await browserChild.newPage();
-
+    
     // Set page timeout
-    page.setDefaultTimeout(120000); // 60 seconds timeout
+    page.setDefaultTimeout(60000); // 60 seconds timeout
+    
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders(extraHTTPHeaders);
+
     await page.setCookie(
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    let reqUrl = '';
-    page.on('request', request => {
-      const url = request.url();
-      if (url.includes(sizeAndPriceGoatUrl)) {
-        reqUrl = url;
-        return;
-      }
-    });
+    
     await page.goto(url, { waitUntil: 'networkidle2' });
-
-    if (!reqUrl) {
-      await updateStatus(recordId, STATUS_ERROR);
-      console.error('No request URL found');
-      throw new Error('No request URL found');
+    
+    // Wait for the page to be fully loaded
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Wait for any dynamic content to load
+    try {
+      await page.waitForSelector('div.swiper-slide-active', { 
+        timeout: 15000,
+        visible: true 
+      });
+    } catch (error) {
+      console.warn(`⚠️ Could not find swiper-slide-active for ${productId}: ${error.message}`);
     }
-
-    const response = await page.evaluate(async (reqUrl) => {
-      const res = await fetch(`${reqUrl}`, {
+    
+    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
+      const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
         credentials: 'include',
         headers: {
           'Accept-Language':	'en-US,en;q=0.9',
@@ -536,7 +833,7 @@ async function extractDetailsFromProductGoat(url, productId) {
         }
       });
       return res.json();
-    }, reqUrl);
+    }, cellItemIdParam, sizeAndPriceGoatUrl);
     
     const html = await page.content();
     const $ = cheerio.load(html);
@@ -544,14 +841,49 @@ async function extractDetailsFromProductGoat(url, productId) {
     let imgSrc = '';
     let imgAlt = '';
 
-    await page.waitForSelector('div.swiper-slide-active', { timeout: 60000 });
-    $('div.swiper-slide-active').each((i, el) => {
-      const img = $(el).find('img');
-      if (img && !imgSrc && !imgAlt) {
-        imgSrc = img.attr('src');
-        imgAlt = img.attr('alt');
+    // Retry logic for finding image
+    let imageRetryCount = 0;
+    const maxImageRetries = 3;
+    
+    while (imageRetryCount < maxImageRetries && (!imgSrc || !imgAlt)) {
+      try {
+        await page.waitForSelector('div.swiper-slide-active', { timeout: 10000 });
+        
+        const html = await page.content();
+        const $ = cheerio.load(html);
+        
+        $('div.swiper-slide-active').each((i, el) => {
+          const img = $(el).find('img');
+          if (img && !imgSrc && !imgAlt) {
+            imgSrc = img.attr('src');
+            imgAlt = img.attr('alt');
+          }
+        });
+        
+        if (imgSrc && imgAlt) {
+          console.log(`✅ Found image for ${productId}: ${imgSrc}`);
+          break;
+        } else {
+          console.log(`⚠️ No image found for ${productId}, retry ${imageRetryCount + 1}/${maxImageRetries}`);
+          imageRetryCount++;
+          
+          if (imageRetryCount < maxImageRetries) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Error finding image for ${productId}, retry ${imageRetryCount + 1}/${maxImageRetries}: ${error.message}`);
+        imageRetryCount++;
+        
+        if (imageRetryCount < maxImageRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
-    });
+    }
+    
+    if (!imgSrc || !imgAlt) {
+      console.warn(`⚠️ Could not find image for ${productId} after ${maxImageRetries} retries`);
+    }
     
     const dataFiltered = getSizeAndPriceGoat(response, productType);
     const products = dataFiltered?.map(item => {
@@ -720,11 +1052,11 @@ function conditionCheckSize(sizeItem, nameItem) {
 }
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Listening on port ${PORT}: ${process.env.DATA_SEARCH_TABLE}`);
+  console.log(`🚀 Listening on port ${PORT} for Sy`);
 });
 
-cron.schedule(process.env.CRON_SCHEDULE || '0 * * * *', async () => {
-  console.log('⏰ Running scheduled crawl at' + new Date());
+cron.schedule(process.env.CRON_SCHEDULE || '0 0 * * *', async () => {
+  console.log('⏰ Running scheduled crawl at 0h');
   await triggerAllSearchesFromAirtable();
 });
 
@@ -745,12 +1077,38 @@ async function triggerAllSearchesFromAirtable() {
 
     console.log(`📋 Found ${records.length} records to process`);
 
+    // Step 1: Update all records to "Crawling" status
+    console.log(`🔄 Step 1: Updating all records to "Crawling" status...`);
+    try {
+      const updatePromises = records.map(record => 
+        updateStatus(record.id, STATUS_CRAWLING)
+      );
+      
+      // Update in batches to avoid overwhelming Airtable API
+      const batchSize = 10;
+      for (let i = 0; i < updatePromises.length; i += batchSize) {
+        const batch = updatePromises.slice(i, i + batchSize);
+        await Promise.all(batch);
+        console.log(`✅ Updated batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(updatePromises.length/batchSize)} (${batch.length} records)`);
+        
+        // Small delay between batches to be respectful to Airtable API
+        if (i + batchSize < updatePromises.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      console.log(`✅ Successfully updated all ${records.length} records to "Crawling" status`);
+    } catch (updateError) {
+      console.error('❌ Error updating records to Crawling status:', updateError.message);
+      // Continue with crawl even if status update fails
+    }
+    // Step 2: Start crawling process
+    console.log(`🔄 Step 2: Starting crawling process...`);
     // Reduce concurrency limit to prevent resource exhaustion
-    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 2);
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 1);
     const limit = pLimit(adjustedConcurrencyLimit);
 
     // Process records in smaller batches to prevent overwhelming the system
-    const batchSize = 5;
+    const batchSize = 1;
     const batches = [];
     
     for (let i = 0; i < records.length; i += batchSize) {
