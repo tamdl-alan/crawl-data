@@ -54,7 +54,7 @@ const PRODUCT_TYPE = {
   SHOE: 'SHOE',
   CLOTHES: 'CLOTHES'
 }
-const CONCURRENCY_LIMIT = 2; // Số lượng request đồng thời
+const CONCURRENCY_LIMIT = 1; // Số lượng request đồng thời
 
 const PRODUCT_ID = 'Product ID';
 const PRODUCT_NAME = 'Product Name';
@@ -482,15 +482,27 @@ async function crawlDataGoat(productId, productType) {
     let fullLink = '';
     let cellItemId = '';
       // get first product link
-      $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-        const aTag = $(el).find('a');
+      // $('div[data-qa="grid_cell_product"]').each((_i, el) => {
+      //   const aTag = $(el).find('a');
+      //   const link = aTag.attr('href');
+      //   if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
+      //     fullLink = goalDomain + link;
+      //     cellItemId = $(el).attr('data-grid-cell-name');
+      //     return false;
+      //   }
+      // });
+
+      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+      if (firstProductElement.length > 0) {
+        const aTag = firstProductElement.find('a');
         const link = aTag.attr('href');
         if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
           fullLink = goalDomain + link;
-          cellItemId = $(el).attr('data-grid-cell-name');
-          return false;
+          cellItemId = firstProductElement.attr('data-grid-cell-name');
         }
-      });
+      }
+      console.log('🚀 ~ fullLink:', fullLink);
+      console.log('🚀 ~ cellItemId:', cellItemId);
     
     // Close the current page and browser before creating a new one for details
     if (page) await page.close();
@@ -758,11 +770,11 @@ async function triggerAllSearchesFromAirtable() {
     console.log(`📋 Found ${records.length} records to process`);
 
     // Reduce concurrency limit to prevent resource exhaustion
-    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 2);
+    const adjustedConcurrencyLimit = Math.min(CONCURRENCY_LIMIT, 1);
     const limit = pLimit(adjustedConcurrencyLimit);
 
     // Process records in smaller batches to prevent overwhelming the system
-    const batchSize = 5;
+    const batchSize = 1;
     const batches = [];
     
     for (let i = 0; i < records.length; i += batchSize) {
