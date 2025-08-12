@@ -695,14 +695,14 @@ async function crawlDataGoat(productId, productType) {
     }
   }
 
+  let browser = null;
+  let page = null;
   try {
-    let browser = null;
-    let page = null;
     browser = await puppeteer.launch(defaultBrowserArgs);
     page = await browser.newPage();
     
     // Set page timeout
-    page.setDefaultTimeout(60000); // 60 seconds timeout
+    await page.setDefaultTimeout(60000); // 60 seconds timeout
     
     await page.setViewport(viewPortBrowser);
     await page.setUserAgent(userAgent);
@@ -753,6 +753,8 @@ async function extractDetailsFromProductGoat(productId) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
+
+    await page.goto(goalDomain, { waitUntil: 'networkidle2' });
 
     const response = await page.evaluate(async (productId, sizeAndPriceGoatUrl) => {
       const res = await fetch(`${sizeAndPriceGoatUrl}=${productId}`, {
