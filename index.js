@@ -692,7 +692,7 @@ async function crawlDataGoat(productionUrl, productId) {
     return await extractDetailsFromProductGoat(productionUrl, productId);
      } catch (error) {
      console.error(`❌ Error crawling ${productId}:`, error.message);
-     console.log(`❌ Production URL: ${productionUrl}`);
+     console.log(`❌ Product URL: ${productionUrl}`);
      throw error;
    }
 }
@@ -998,7 +998,7 @@ async function triggerAllSearchesFromAirtable() {
           const productId = record.get('Product ID');
           const snkrdunkApi = record.get('Snkrdunk API');
           const productType = record.get('Product Type');
-          const productionUrl = record.get('Production Url');
+          const productionUrl = record.get('Product URL');
           
           // Debug logging
           console.log(`🔍 Record data:`, {
