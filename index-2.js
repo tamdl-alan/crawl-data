@@ -404,7 +404,7 @@ async function processQueueToCrawl() {
         }
         errorCount++;
       } else {
-        await deleteRecordByProductId(productId);
+        await deleteRecordByProductId(productionUrl);
         await pushToAirtable(mergedArr);
         await updateStatus(recordId, STATUS_SUCCESS);
         if (!res.headersSent) {
