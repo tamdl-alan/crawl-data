@@ -690,11 +690,11 @@ async function snkrdunkfetchData(api) {
 async function crawlDataGoat(productionUrl, productId) {
   try {
     return await extractDetailsFromProductGoat(productionUrl, productId);
-  } catch (error) {
-    console.error(`❌ Error crawling ${productId}:`, err.message);
-    console.log(`❌ Production URL: ${productionUrl}`);
-
-  }
+     } catch (error) {
+     console.error(`❌ Error crawling ${productId}:`, error.message);
+     console.log(`❌ Production URL: ${productionUrl}`);
+     throw error;
+   }
 }
 
 async function extractDetailsFromProductGoat(productionUrl, productId) {
@@ -995,7 +995,7 @@ async function triggerAllSearchesFromAirtable() {
       const tasks = batch.map((record) =>
         limit(async () => {
           const recordId = record.id;
-          const productId = record.get(PRODUCT_ID);
+          const productId = record.get('Product ID');
           const snkrdunkApi = record.get('Snkrdunk API');
           const productType = record.get('Product Type');
           const productionUrl = record.get('Production Url');
