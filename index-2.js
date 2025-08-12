@@ -995,10 +995,10 @@ async function triggerAllSearchesFromAirtable() {
       const tasks = batch.map((record) =>
         limit(async () => {
           const recordId = record.id;
-          const productId = record.get(PRODUCT_URL);
+          const productId = record.get(PRODUCT_ID);
           const snkrdunkApi = record.get('Snkrdunk API');
           const productType = record.get('Product Type');
-          const productionUrl = record.get('Production URL');
+          const productionUrl = record.get('Production Url');
           
           // Debug logging
           console.log(`🔍 Record data:`, {
