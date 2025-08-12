@@ -85,7 +85,6 @@ const RETRY_LIMIT = 3; // Retry limit for login attempts
 
 // ========== Goal Start ========== //
 const goalDomain = 'https://www.goat.com';
-const searchUrl = 'https://www.goat.com/search';
 const sizeAndPriceGoatUrl = 'https://www.goat.com/web-api/v1/product_variants/buy_bar_data?productTemplateId'
 let productType = PRODUCT_TYPE.SHOE;
 // ========== Goal End ========== //
@@ -356,6 +355,7 @@ async function processQueueToCrawl() {
     const params = req.query;
     recordId = params.recordId;
     const productId = params.productId;
+    const productionUrl = params?.productionUrl?.replace(/^\/+/, '');
     const snkrdunkApi = params.snkrdunkApi?.replace(/^\/+/, '');
     productType = params.productType || PRODUCT_TYPE.SHOE;
     
@@ -366,8 +366,8 @@ async function processQueueToCrawl() {
     };
     
     // Validate parameters
-    if (!productId || !snkrdunkApi) {
-      console.error(`❌ Invalid parameters for record ${recordId}: productId=${productId}, snkrdunkApi=${snkrdunkApi}`);
+    if (!productId || !snkrdunkApi || !productionUrl) {
+      console.error(`❌ Invalid parameters for record ${recordId}: productId=${productId}, snkrdunkApi=${snkrdunkApi}, productionUrl=${productionUrl}`);
       try {
         await updateStatus(recordId, STATUS_ERROR);
         if (!res.headersSent) {
@@ -391,7 +391,7 @@ async function processQueueToCrawl() {
       console.log(`------------Crawling data [${productId}] SNKRDUNK End: [${new Date()}]------------`);
 
       console.log(`------------Crawling data [${productId}] GOAT Start: [${new Date()}]------------`);
-      const dataGoat = await crawlDataGoat(productId, productType);
+      const dataGoat = await crawlDataGoat(productionUrl, productId, productType);
       console.log(`------------Crawling data [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
@@ -430,7 +430,8 @@ async function processQueueToCrawl() {
           productType,
           error: error.message,
           timestamp: new Date().toISOString(),
-          retryAttempt: currentRetries + 1
+          retryAttempt: currentRetries + 1,
+          productionUrl
         };
         
         failedQueue.push(failedItem);
@@ -512,7 +513,7 @@ async function processFailedQueue() {
     console.log(`📋 Processing failed item ${processedCount}. Remaining in failed queue: ${failedQueue.length}`);
     console.log(`🔄 Retrying ${failedItem.productId} (retry ${failedItem.retryAttempt}/${MAX_RETRY_ATTEMPTS}, previous error: ${failedItem.error})`);
 
-    const { req, res, recordId, productId, snkrdunkApi, productType, retryAttempt } = failedItem;
+    const { req, res, recordId, productId, snkrdunkApi, productType, retryAttempt, productionUrl } = failedItem;
     
     // Track current processing request
     currentProcessingRequest = {
@@ -526,7 +527,7 @@ async function processFailedQueue() {
       console.log(`------------Retrying [${productId}] SNKRDUNK End: [${new Date()}]------------`);
 
       console.log(`------------Retrying [${productId}] GOAT Start: [${new Date()}]------------`);
-      const dataGoat = await crawlDataGoat(productId, productType);
+      const dataGoat = await crawlDataGoat(productionUrl, productId, productType);
       console.log(`------------Retrying [${productId}] GOAT End: [${new Date()}]------------`);
 
       const mergedArr = mergeData(dataSnk, dataGoat);
@@ -686,50 +687,17 @@ async function snkrdunkfetchData(api) {
   }
 }
 
-async function crawlDataGoat(productId, productType) {
-  if (productType === PRODUCT_TYPE.CLOTHES) {
-    try {
-      return await extractDetailsFromProductGoat(productId);
-    } catch (error) {
-      console.error(`❌ Error crawling ${productId}:`, err.message);
-    }
-  }
-
-  let browser = null;
-  let page = null;
+async function crawlDataGoat(productionUrl, productId) {
   try {
-    browser = await puppeteer.launch(defaultBrowserArgs);
-    page = await browser.newPage();
-    
-    // Set page timeout
-    await page.setDefaultTimeout(60000); // 60 seconds timeout
-    
-    await page.setViewport(viewPortBrowser);
-    await page.setUserAgent(userAgent);
-    await page.setExtraHTTPHeaders(extraHTTPHeaders);
+    return await extractDetailsFromProductGoat(productionUrl, productId);
+  } catch (error) {
+    console.error(`❌ Error crawling ${productId}:`, err.message);
+    console.log(`❌ Production URL: ${productionUrl}`);
 
-    await page.goto(`${searchUrl}?query=${productId}`, { waitUntil: 'networkidle2' });
-
-    const content = await page.content();
-    const $ = cheerio.load(content);
-
-    let cellItemId = '';
-    const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
-    if (firstProductElement.length > 0) {
-      cellItemId = firstProductElement.attr('data-grid-cell-name');
-    }
-    const details = await extractDetailsFromProductGoat(cellItemId);
-    return details;
-  } catch (err) {
-    console.error(`❌ Error crawling ${cellItemId}:`, err.message);
-    throw err;
-  } finally {
-    if (page) await page?.close();
-    if (browser) await browser?.close();
   }
 }
 
-async function extractDetailsFromProductGoat(productId) {
+async function extractDetailsFromProductGoat(productionUrl, productId) {
   if (!productId) {
     console.error(`❌ Invalid productId: ${productId}`);
     return [];
@@ -754,7 +722,7 @@ async function extractDetailsFromProductGoat(productId) {
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
 
-    await page.goto(goalDomain, { waitUntil: 'networkidle2' });
+    await page.goto(goalDomain + '/' + productionUrl, { waitUntil: 'networkidle2' });
 
     const response = await page.evaluate(async (productId, sizeAndPriceGoatUrl) => {
       const res = await fetch(`${sizeAndPriceGoatUrl}=${productId}`, {
