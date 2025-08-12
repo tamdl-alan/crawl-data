@@ -56,7 +56,7 @@ const PRODUCT_TYPE = {
 }
 const CONCURRENCY_LIMIT = 1; // Số lượng request đồng thời
 
-const PRODUCT_ID = 'Product ID';
+const PRODUCT_URL = 'Product URL';
 const PRODUCT_NAME = 'Product Name';
 const SIZE_GOAT = 'Size Goat';
 const PRICE_GOAT = 'Price Goat';
@@ -537,7 +537,7 @@ async function processFailedQueue() {
         await updateStatus(recordId, STATUS_ERROR);
         errorCount++;
       } else {
-        await deleteRecordByProductId(productId);
+        await deleteRecordByProductId(productionUrl);
         await pushToAirtable(mergedArr);
         await updateStatus(recordId, STATUS_SUCCESS);
         console.log(`✅ Successfully retried ${productId} (attempt ${retryAttempt})`);
@@ -587,9 +587,9 @@ async function processFailedQueue() {
   console.log(`📊 Failed queue summary: ${successCount} recovered, ${errorCount} final failures`);
 }
 
-async function deleteRecordByProductId(productId) {
+async function deleteRecordByProductId(productionUrl) {
   const existingRecords = await table.select({
-    filterByFormula: `{${PRODUCT_ID}} = '${productId}'`,
+    filterByFormula: `{${PRODUCT_URL}} = '${productionUrl}'`,
   }).firstPage();
 
   const recordIds = existingRecords?.map(record => record.id);
@@ -597,7 +597,7 @@ async function deleteRecordByProductId(productId) {
     const chunk = recordIds.splice(0, 10);
     await table.destroy(chunk);
   }
-  console.log(`✅ Deleted ${existingRecords.length} records with Product ID: ${productId}`);
+  console.log(`✅ Deleted ${existingRecords.length} records with Product URL: ${productionUrl}`);
 }
 
 function mergeData(dataSnk, dataGoal) {
@@ -755,7 +755,7 @@ async function extractDetailsFromProductGoat(productionUrl, productId) {
     const dataFiltered = getSizeAndPriceGoat(response, productType);
     const products = dataFiltered?.map(item => {
       return {
-        [PRODUCT_ID]: productId,
+        [PRODUCT_URL]: productionUrl,
         [PRODUCT_NAME]: imgAlt,
         [IMAGE]: [{ url: imgSrc }],
         [SIZE_GOAT]: item[SIZE_GOAT],
@@ -764,7 +764,7 @@ async function extractDetailsFromProductGoat(productionUrl, productId) {
     });
 
     console.log(`✅ Extracted Goat data!!!`);
-    console.table(products, [PRODUCT_ID, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
+    console.table(products, [PRODUCT_URL, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
   } catch (err) {
     console.error(`❌ Error extract product:`, err.message);
@@ -995,19 +995,21 @@ async function triggerAllSearchesFromAirtable() {
       const tasks = batch.map((record) =>
         limit(async () => {
           const recordId = record.id;
-          const productId = record.get(PRODUCT_ID);
+          const productId = record.get(PRODUCT_URL);
           const snkrdunkApi = record.get('Snkrdunk API');
           const productType = record.get('Product Type');
+          const productionUrl = record.get('Production URL');
           
           // Debug logging
           console.log(`🔍 Record data:`, {
             recordId,
             productId,
             snkrdunkApi,
-            productType
+            productType,
+            productionUrl
           });
 
-          if (!productId || !snkrdunkApi) {
+          if (!productId || !snkrdunkApi || !productionUrl) {
             console.warn(`⚠️ Bỏ qua record thiếu dữ liệu: ${recordId}`);
             return {
               status: 'skipped',
@@ -1020,7 +1022,7 @@ async function triggerAllSearchesFromAirtable() {
           
           // Ensure baseUrl doesn't end with slash
           const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-          const url = `${cleanBaseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType || PRODUCT_TYPE.SHOE)}`;
+          const url = `${cleanBaseUrl}/search?recordId=${encodeURIComponent(recordId)}&productId=${encodeURIComponent(productId)}&snkrdunkApi=${encodeURIComponent(snkrdunkApi)}&productType=${encodeURIComponent(productType || PRODUCT_TYPE.SHOE)}&productionUrl=${encodeURIComponent(productionUrl)}`;
           
           console.log(`📤 Triggering crawl for ${productId} (${recordId})`);
           console.log(`🔗 URL: ${url}`);
