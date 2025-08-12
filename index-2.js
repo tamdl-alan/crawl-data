@@ -687,9 +687,17 @@ async function snkrdunkfetchData(api) {
 }
 
 async function crawlDataGoat(productId, productType) {
-  let browser = null;
-  let page = null;
+  if (productType === PRODUCT_TYPE.CLOTHES) {
+    try {
+      return await extractDetailsFromProductGoat(productId);
+    } catch (error) {
+      console.error(`❌ Error crawling ${productId}:`, err.message);
+    }
+  }
+
   try {
+    let browser = null;
+    let page = null;
     browser = await puppeteer.launch(defaultBrowserArgs);
     page = await browser.newPage();
     
@@ -705,50 +713,28 @@ async function crawlDataGoat(productId, productType) {
     const content = await page.content();
     const $ = cheerio.load(content);
 
-    let fullLink = '';
     let cellItemId = '';
-      // get first product link
-      // $('div[data-qa="grid_cell_product"]').each((_i, el) => {
-      //   const aTag = $(el).find('a');
-      //   const link = aTag.attr('href');
-      //   if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
-      //     fullLink = goalDomain + link;
-      //     cellItemId = $(el).attr('data-grid-cell-name');
-      //     return false;
-      //   }
-      // });
-
-      const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
-      if (firstProductElement.length > 0) {
-        const aTag = firstProductElement.find('a');
-        const link = aTag.attr('href');
-        if (productType === PRODUCT_TYPE.SHOE || link?.replace(/^\/+/, '') === productId?.replace(/^\/+/, '')) {
-          fullLink = goalDomain + link;
-          cellItemId = firstProductElement.attr('data-grid-cell-name');
-        }
-      }
-    
-    const details = await extractDetailsFromProductGoat(fullLink, productId, cellItemId);
+    const firstProductElement = $('div[data-qa="grid_cell_product"]').first();
+    if (firstProductElement.length > 0) {
+      cellItemId = firstProductElement.attr('data-grid-cell-name');
+    }
+    const details = await extractDetailsFromProductGoat(cellItemId);
     return details;
   } catch (err) {
-    console.error(`❌ Error crawling ${productId}:`, err.message);
+    console.error(`❌ Error crawling ${cellItemId}:`, err.message);
     throw err;
   } finally {
-    try {
-      if (page) await page?.close();
-      if (browser) await browser?.close();
-    } catch (closeError) {
-      console.error('❌ Error closing browser:', closeError.message);
-    }
+    if (page) await page?.close();
+    if (browser) await browser?.close();
   }
 }
 
-async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
-  if (!url || !cellItemIdParam) {
-    console.error(`❌ Invalid URL or cellItemIdParam: ${url}, ${cellItemIdParam}`);
+async function extractDetailsFromProductGoat(productId) {
+  if (!productId) {
+    console.error(`❌ Invalid productId: ${productId}`);
     return [];
   }
-  
+
   let browserChild = null;
   let page = null;
   
@@ -767,11 +753,9 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
       { name: 'currency', value: 'JPY', domain: 'www.goat.com', path: '/', secure: true },
       { name: 'country', value: 'JP', domain: 'www.goat.com', path: '/', secure: true },
     );
-    
-    await page.goto(url, { waitUntil: 'networkidle2' });
-    
-    const response = await page.evaluate(async (cellItemIdParam, sizeAndPriceGoatUrl) => {
-      const res = await fetch(`${sizeAndPriceGoatUrl}=${cellItemIdParam}`, {
+
+    const response = await page.evaluate(async (productId, sizeAndPriceGoatUrl) => {
+      const res = await fetch(`${sizeAndPriceGoatUrl}=${productId}`, {
         credentials: 'include',
         headers: {
           'Accept-Language':	'en-US,en;q=0.9',
@@ -781,8 +765,8 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         }
       });
       return res.json();
-    }, cellItemIdParam, sizeAndPriceGoatUrl);
-    
+    }, productId, sizeAndPriceGoatUrl);
+
     const html = await page.content();
     const $ = cheerio.load(html);
 
@@ -797,7 +781,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         imgAlt = img.attr('alt');
       }
     });
-    
+
     const dataFiltered = getSizeAndPriceGoat(response, productType);
     const products = dataFiltered?.map(item => {
       return {
@@ -808,7 +792,7 @@ async function extractDetailsFromProductGoat(url, productId, cellItemIdParam) {
         [PRICE_GOAT]: item[PRICE_GOAT]
       }
     });
-    
+
     console.log(`✅ Extracted Goat data!!!`);
     console.table(products, [PRODUCT_ID, PRODUCT_NAME, SIZE_GOAT, PRICE_GOAT]);
     return products;
