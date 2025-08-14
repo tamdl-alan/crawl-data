@@ -9,6 +9,32 @@ services:
     restart: always
     environment:
       - NODE_ENV=production
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+    # Resource limits để tránh quá tải
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+    # Shared memory size cho Chrome
+    shm_size: 2gb
+    # Capabilities cần thiết
+    cap_add:
+      - SYS_ADMIN
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     # dns:
     #   - 8.8.8.8
     #   - 1.1.1.1

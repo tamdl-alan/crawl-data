@@ -36,6 +36,131 @@ const viewPortBrowser = { width: 1920, height: 1200 };
 const extraHTTPHeaders = {
   'Accept-Language': 'ja,ja-JP;q=0.9,en;q=0.8'
 }
+
+// Browser Pool Management
+class BrowserPool {
+  constructor(maxBrowsers = 2) {
+    this.maxBrowsers = maxBrowsers;
+    this.browsers = [];
+    this.waitingQueue = [];
+    this.isShuttingDown = false;
+  }
+
+  async getBrowser() {
+    // Check if we have an available browser
+    if (this.browsers.length < this.maxBrowsers) {
+      try {
+        const browser = await this.createBrowser();
+        this.browsers.push(browser);
+        return browser;
+      } catch (error) {
+        console.error('❌ Failed to create browser:', error.message);
+        throw error;
+      }
+    }
+
+    // Wait for a browser to become available
+    return new Promise((resolve, reject) => {
+      this.waitingQueue.push({ resolve, reject });
+    });
+  }
+
+  async createBrowser() {
+    const maxRetries = 3;
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔄 Creating browser instance (attempt ${attempt}/${maxRetries})...`);
+        
+        const browser = await puppeteer.launch({
+          ...defaultBrowserArgs,
+          timeout: 30000, // 30 second timeout
+        });
+
+        // Test browser functionality
+        const testPage = await browser.newPage();
+        await testPage.goto('data:text/html,<html><body>Test</body></html>', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 10000 
+        });
+        await testPage.close();
+
+        console.log(`✅ Browser created successfully (attempt ${attempt})`);
+        return browser;
+      } catch (error) {
+        lastError = error;
+        console.error(`❌ Browser creation failed (attempt ${attempt}/${maxRetries}):`, error.message);
+        
+        // Wait before retry
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+        }
+      }
+    }
+
+    throw new Error(`Failed to create browser after ${maxRetries} attempts: ${lastError.message}`);
+  }
+
+  async releaseBrowser(browser) {
+    try {
+      // Remove from active browsers
+      const index = this.browsers.indexOf(browser);
+      if (index > -1) {
+        this.browsers.splice(index, 1);
+      }
+
+      // Close browser
+      await browser.close();
+      console.log('✅ Browser released and closed');
+
+      // Process waiting queue
+      if (this.waitingQueue.length > 0) {
+        const { resolve } = this.waitingQueue.shift();
+        try {
+          const newBrowser = await this.createBrowser();
+          this.browsers.push(newBrowser);
+          resolve(newBrowser);
+        } catch (error) {
+          console.error('❌ Failed to create browser for waiting queue:', error.message);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error releasing browser:', error.message);
+    }
+  }
+
+  async shutdown() {
+    this.isShuttingDown = true;
+    console.log('🔄 Shutting down browser pool...');
+    
+    // Close all browsers
+    const closePromises = this.browsers.map(async (browser) => {
+      try {
+        await browser.close();
+      } catch (error) {
+        console.error('❌ Error closing browser during shutdown:', error.message);
+      }
+    });
+
+    await Promise.allSettled(closePromises);
+    this.browsers = [];
+    console.log('✅ Browser pool shutdown complete');
+  }
+
+  getStatus() {
+    return {
+      activeBrowsers: this.browsers.length,
+      maxBrowsers: this.maxBrowsers,
+      waitingQueue: this.waitingQueue.length,
+      isShuttingDown: this.isShuttingDown
+    };
+  }
+}
+
+// Initialize browser pool
+const browserPool = new BrowserPool(2);
+
 const defaultBrowserArgs = {
   headless: 'true',
   executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
@@ -43,7 +168,74 @@ const defaultBrowserArgs = {
     "--disable-setuid-sandbox",
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-gpu,"
+    "--disable-gpu",
+    "--disable-web-security",
+    "--disable-features=VizDisplayCompositor",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-field-trial-config",
+    "--disable-ipc-flooding-protection",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-plugins",
+    "--disable-sync",
+    "--disable-translate",
+    "--hide-scrollbars",
+    "--mute-audio",
+    "--no-zygote",
+    "--single-process",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-hang-monitor",
+    "--disable-prompt-on-repost",
+    "--disable-sync-preferences",
+    "--disable-web-resources",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--safebrowsing-disable-auto-update",
+    "--enable-automation",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--force-device-scale-factor=1",
+    "--disable-infobars",
+    "--window-position=0,0",
+    "--ignore-certifcate-errors",
+    "--ignore-certifcate-errors-spki-list",
+    "--ignore-ssl-errors",
+    "--ignore-certificate-errors",
+    "--ignore-ssl-errors",
+    "--ignore-certificate-errors-spki-list",
+    "--disable-extensions-except",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-client-side-phishing-detection",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-hang-monitor",
+    "--disable-prompt-on-repost",
+    "--disable-sync",
+    "--disable-web-resources",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--safebrowsing-disable-auto-update",
+    "--enable-automation",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--force-device-scale-factor=1",
+    "--disable-infobars",
+    "--window-position=0,0",
+    "--ignore-certifcate-errors",
+    "--ignore-certifcate-errors-spki-list",
+    "--ignore-ssl-errors",
+    "--ignore-certificate-errors",
+    "--ignore-ssl-errors",
+    "--ignore-certificate-errors-spki-list"
   ]
 }
 
@@ -260,6 +452,46 @@ app.get('/retry-attempts', (_req, res) => {
   };
   
   res.json(retryInfo);
+});
+
+app.get('/browser-pool-status', (_req, res) => {
+  const browserStatus = browserPool.getStatus();
+  const systemInfo = {
+    memory: process.memoryUsage(),
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json({
+    browserPool: browserStatus,
+    system: systemInfo
+  });
+});
+
+app.post('/restart-browser-pool', async (_req, res) => {
+  try {
+    console.log('🔄 Restarting browser pool...');
+    await browserPool.shutdown();
+    
+    // Wait a moment before reinitializing
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Reinitialize browser pool
+    Object.assign(browserPool, new BrowserPool(2));
+    
+    console.log('✅ Browser pool restarted successfully');
+    res.json({
+      message: '✅ Browser pool restarted successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error restarting browser pool:', error.message);
+    res.status(500).json({
+      error: '❌ Failed to restart browser pool',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 app.get('/crawl-all', async (_req, res) => {
@@ -621,12 +853,18 @@ function mergeData(dataSnk, dataGoal) {
 }
 
 async function snkrdunkLogin() {
-  const browser = await puppeteer.launch(defaultBrowserArgs);
+  let browser = null;
   try {
     if (cookieHeader) {
       return
     }
+    
+    browser = await browserPool.getBrowser();
     const page = await browser.newPage();
+    
+    // Set page timeout
+    page.setDefaultTimeout(60000);
+    
     await page.setViewport({ width: 1280, height: 800 });
     await page.goto(LOGIN_PAGE_SNKRDUNK, { waitUntil: 'networkidle2' });
     await page.type('input[name="email"]', EMAIL_SNKRDUNK, { delay: 100 });
@@ -646,7 +884,9 @@ async function snkrdunkLogin() {
       }
       throw err;
   } finally {
-      await browser.close();
+      if (browser) {
+        await browserPool.releaseBrowser(browser);
+      }
   }
 }
 
@@ -703,12 +943,12 @@ async function extractDetailsFromProductGoat(productionUrl, productId) {
     return [];
   }
 
-  let browserChild = null;
+  let browser = null;
   let page = null;
   
   try {
-    browserChild = await puppeteer.launch(defaultBrowserArgs);
-    page = await browserChild.newPage();
+    browser = await browserPool.getBrowser();
+    page = await browser.newPage();
     
     // Set page timeout
     page.setDefaultTimeout(60000); // 60 seconds timeout
@@ -772,9 +1012,9 @@ async function extractDetailsFromProductGoat(productionUrl, productId) {
   } finally {
     try {
       if (page) await page.close();
-      if (browserChild) await browserChild.close();
+      if (browser) await browserPool.releaseBrowser(browser);
     } catch (closeError) {
-      console.error('❌ Error closing browser child:', closeError.message);
+      console.error('❌ Error closing browser:', closeError.message);
     }
   }
 }
@@ -918,8 +1158,55 @@ function conditionCheckSize(sizeItem, nameItem) {
   return false;
 }
 
-app.listen(PORT, async () => {
+// Graceful shutdown handling
+process.on('SIGTERM', async () => {
+  console.log('🔄 Received SIGTERM, starting graceful shutdown...');
+  await gracefulShutdown();
+});
+
+process.on('SIGINT', async () => {
+  console.log('🔄 Received SIGINT, starting graceful shutdown...');
+  await gracefulShutdown();
+});
+
+async function gracefulShutdown() {
+  try {
+    console.log('🔄 Shutting down browser pool...');
+    await browserPool.shutdown();
+    
+    console.log('🔄 Shutting down server...');
+    server.close(() => {
+      console.log('✅ Server closed');
+      process.exit(0);
+    });
+    
+    // Force exit after 10 seconds if graceful shutdown fails
+    setTimeout(() => {
+      console.error('❌ Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+    
+  } catch (error) {
+    console.error('❌ Error during graceful shutdown:', error.message);
+    process.exit(1);
+  }
+}
+
+// Memory leak prevention
+setInterval(() => {
+  const memUsage = process.memoryUsage();
+  if (memUsage.heapUsed > 500 * 1024 * 1024) { // 500MB
+    console.warn('⚠️ High memory usage detected:', {
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + 'MB',
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + 'MB',
+      external: Math.round(memUsage.external / 1024 / 1024) + 'MB'
+    });
+  }
+}, 60000); // Check every minute
+
+const server = app.listen(PORT, async () => {
   console.log(`🚀 Listening on port ${PORT} for Sy`);
+  console.log(`🔧 Browser pool initialized with max ${browserPool.maxBrowsers} browsers`);
 });
 
 cron.schedule(process.env.CRON_SCHEDULE || '0 0 * * *', async () => {
